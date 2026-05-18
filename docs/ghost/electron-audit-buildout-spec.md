@@ -1,8 +1,8 @@
 # Electronegativity Full Electron Audit Buildout Spec
 
-Status: draft-for-review
+Status: reviewed-draft
 Owner: Ghost / Ryushe
-Reviewer: pending Codex review
+Reviewer: Codex CLI review completed 2026-05-18
 Repo: `https://github.com/ghostonbutterbread/electronegativity`
 Branch: `ghost/electron-security-audit-spec`
 Canonical planning context:
@@ -23,7 +23,7 @@ Primary hunt goal for Canva-style apps:
 attacker-controlled input -> renderer JavaScript execution -> preload/HostRpc/IPC reachability -> meaningful desktop/app impact
 ```
 
-The scanner should not prove the full exploit chain by itself. Its job is to map likely trust boundaries, suspicious source/sink/bridge evidence, and hand off precise hypotheses to Electron Team agents.
+The scanner should not prove the full exploit chain by itself. Its job is to map likely trust boundaries, suspicious source/sink/bridge evidence, and hand off precise hypotheses to Electron Team agents. In v1, source-to-sink output is a `candidate_chain` with explicit `missing_evidence`; confirmed reachability requires AppMap support, agent trace, or separately approved dynamic validation.
 
 ## 2. Design principles
 
@@ -49,6 +49,26 @@ The scanner should output both:
 ### 2.5 Read-only and safe
 
 The scanner must not run the target app, interact with vendor infrastructure, perform CDP actions, mutate files outside its output path, or attempt exploitation.
+
+### 2.6 V1 scope boundary
+
+V1 should not become a general static taint engine. Keep the core implementation to deterministic Electron facts, local AST patterns, and shallow/co-located hypotheses. Deep reachability is delegated to AppMap, Electron Team agents, or later explicit data-flow work.
+
+### 2.7 Severity and confidence policy
+
+- `severity` describes likely impact in context. Remote/untrusted content, preload bridge reachability, dangerous IPC sinks, and permissive navigation raise severity. Local-only privileged UI, admin-only surfaces, strong sandboxing, and no bridge evidence lower severity.
+- `confidence` describes evidence quality. Literal Electron API misuse with direct location evidence is high confidence; bundled/minified heuristic matches are low confidence unless supported by multiple signals.
+- Inventory records should not abuse `severity`. Use `classification` to distinguish `finding`, `hardening`, `inventory`, and `hypothesis`.
+
+### 2.8 False-positive policy for bundled/minified apps
+
+Large production Electron apps often contain minified bundles, generated files, vendored dependencies, and sourcemap gaps. The scanner must classify files before assigning strong findings.
+
+Rules:
+
+- Minified/generated/vendor files default to `inventory` or low-confidence `hypothesis` unless a strong literal Electron API misuse is visible.
+- Findings should include `is_minified`, `is_bundle`, `vendor_or_generated`, `source_map_available`, `parser_status`, and optional `suppression_reason`.
+- Hypotheses should include `confidence_reasons` and `negative_evidence`, especially when strong CSP, sanitizer evidence, sandboxed iframes, or absent bridge evidence reduces risk.
 
 ## 3. System architecture
 
@@ -85,7 +105,7 @@ Electronegativity should not replace AppMap. It should add an Electron-specific 
 - Which IPC channels exist?
 - Which source/sink/bridge paths look security-relevant?
 
-When AppMap evidence is available, the scanner or harness adapter can attach `appmap_refs` to findings/hypotheses. If AppMap is unavailable, scanner output should still stand alone.
+The scanner must not depend on AppMap. It should emit stable `entity_id` and `relationship_id` values for Electron facts and local relationships. The harness/AppMap adapter resolves those IDs into `appmap_refs` when AppMap evidence exists. If AppMap is unavailable, scanner output should still stand alone.
 
 ## 4. Input support
 
@@ -109,16 +129,17 @@ Current parser support should be audited and modernized for:
 - dynamic imports
 - minified bundled code best-effort handling
 
-Parser failures must be non-fatal and represented in output.
+Parser failures must be non-fatal and represented in output. Parser modernization and file classification are early-phase prerequisites before broad heuristic sink checks.
 
 ## 5. Output contract
 
 ### 5.1 Output files
 
-The scanner should support an output directory mode that writes:
+The scanner should support an output directory mode that writes top-level run metadata and result files:
 
 ```text
 out/
+├── run.json
 ├── findings.json
 ├── findings.sarif
 ├── hypotheses.jsonl
@@ -129,6 +150,21 @@ out/
 
 Existing single-file CSV/SARIF behavior should remain compatible when feasible.
 
+`run.json` should include:
+
+```json
+{
+  "schema_version": "1.0",
+  "scanner_version": "...",
+  "target_id": "stable-or-user-supplied-target-id",
+  "input_kind": "asar|directory|file|package_root",
+  "electron_version": "41.1.0",
+  "electron_version_source": "cli|package_json|lockfile|binary_metadata|unknown",
+  "electron_version_confidence": "low|medium|high",
+  "generated_at": "ISO-8601 timestamp"
+}
+```
+
 ### 5.2 Finding schema
 
 Each finding should include:
@@ -136,10 +172,13 @@ Each finding should include:
 ```json
 {
   "type": "finding",
+  "classification": "finding",
   "check_id": "IPC_SENDER_VALIDATION_MISSING",
+  "result_id": "stable hash of check_id + normalized file + location + evidence",
   "title": "IPC handler lacks visible sender validation",
   "severity": "medium|high|critical|info",
-  "confidence": "tentative|firm|high",
+  "confidence": "low|medium|high",
+  "confidence_reasons": ["dangerous IPC sink", "no visible origin allowlist"],
   "file": "relative/path.js",
   "line": 123,
   "column": 4,
@@ -151,7 +190,15 @@ Each finding should include:
     "electron_version": "41.1.0",
     "default_behavior": "sandbox_default_true"
   },
+  "validation_state": "static_only",
   "manual_review": true,
+  "file_classification": {
+    "is_minified": false,
+    "is_bundle": false,
+    "vendor_or_generated": false,
+    "source_map_available": false,
+    "parser_status": "ok"
+  },
   "next_agent_hint": "Trace whether untrusted renderer content can invoke this channel."
 }
 ```
@@ -163,19 +210,23 @@ Each hypothesis should include:
 ```json
 {
   "type": "hypothesis",
-  "hypothesis_id": "ELECTRON-H001",
+  "classification": "hypothesis",
+  "hypothesis_id": "stable hash of candidate_chain + evidence",
   "title": "Imported SVG metadata may reach HTML render sink before bridge call",
   "source_label": "file_upload_import",
   "sink_label": "dom_inner_html",
   "bridge_label": "context_bridge_or_hostrpc_unknown",
   "impact_label": "ipc_reachability_unknown",
-  "chain": [
+  "candidate_chain": [
     {"kind": "source", "label": "file_upload_import", "file": "...", "line": 10},
     {"kind": "sink", "label": "dom_inner_html", "file": "...", "line": 42},
     {"kind": "bridge", "label": "preload_global", "file": "...", "line": 5}
   ],
   "confidence": "low|medium|high",
+  "confidence_reasons": ["nearby source/sink labels", "preload global present"],
+  "negative_evidence": ["no proven source-to-sink trace"],
   "rank": 0.0,
+  "validation_state": "static_only",
   "missing_evidence": ["source-to-sink trace", "runtime frame privilege"],
   "next_agent_hint": "Run renderer-js-sink-agent with these files and ask if source reaches sink."
 }
@@ -185,6 +236,7 @@ Each hypothesis should include:
 
 Inventory should capture discovered Electron components even when no issue is found:
 
+- run metadata and version/fuse provenance
 - windows / renderer containers
 - webPreferences values
 - preload files
@@ -196,6 +248,7 @@ Inventory should capture discovered Electron components even when no issue is fo
 - file/protocol usage
 - renderer sinks
 - suspected content vectors
+- stable `entity_id` / `relationship_id` values for harness/AppMap resolution
 
 This inventory becomes the static baseline map for agents.
 
@@ -213,11 +266,11 @@ The upstream scanner has checks written around older Electron defaults. Current 
 
 ### Requirements
 
-- Detect Electron version from package metadata, Electron binary metadata when available, lockfiles, or explicit CLI flag.
-- Model explicit insecure settings as findings regardless of version.
+- Detect Electron version from package metadata, Electron binary metadata when available, lockfiles, or explicit CLI flag. Always record `electron_version_source` and `electron_version_confidence`.
+- Model explicit insecure settings as findings regardless of version, but set severity from content trust and reachability context rather than the setting alone.
 - Model missing settings according to detected version.
-- Downgrade or relabel missing secure-by-default settings as `info`/`hardening` instead of high severity.
-- Detect interactions where another setting changes effective behavior, especially `nodeIntegration: true` and preload sandbox behavior.
+- Downgrade or relabel missing secure-by-default settings as `info`/`hardening` instead of high severity. Unknown Electron versions should be conservative without pretending precision.
+- Detect interactions where another setting changes effective behavior, especially `nodeIntegration: true`, global sandboxing, preload sandbox behavior, `nodeIntegrationInWorker`, and `nodeIntegrationInSubFrames`.
 
 ### Deliverables
 
@@ -233,14 +286,17 @@ Existing checks mostly cover `BrowserWindow` and `BrowserView`. Current Electron
 
 ### Requirements
 
-- Detect `BrowserWindow`, `BrowserView`, `WebContentsView`, and `<webview>` usage.
+- Detect `BrowserWindow`, `BrowserView`, `WebContentsView`, and `<webview>` usage, including `will-attach-webview` handlers.
 - Extract `webPreferences` where statically possible.
-- Link container to preload, loadURL/loadFile target, session partition, and navigation/window handlers when nearby.
+- Link container to preload, loadURL/loadFile target, session partition, navigation/window handlers, and global sandbox state when nearby.
 - Output container records to `inventory.json`.
 
 ### Deliverables
 
 - Renderer container extractor.
+- `WEBVIEW_WILL_ATTACH_MISSING_OR_WEAK`
+- `WEBVIEW_PRELOAD_NOT_STRIPPED_OR_VALIDATED`
+- `WEBVIEW_OPTIONS_ALLOW_INSECURE_FEATURES`
 - Component labels in findings.
 - Fixtures for direct and factory-created windows.
 
@@ -292,8 +348,10 @@ Current Electron docs explicitly require validating IPC senders. Upstream lacks 
   - `event.senderFrame.url`
   - `event.sender.getURL()`
   - `event.senderFrame.origin` where applicable
-  - frame/process IDs
-  - explicit allowlists
+  - explicit URL/origin/frame allowlists
+  - frame/process IDs as weak/inventory evidence only
+
+- Do not count `processId`, `frameId`, or mere `sender` inspection as validation unless tied to URL/origin/frame allowlist logic.
 - Tag dangerous sinks inside handlers:
   - filesystem read/write/open
   - `shell.openExternal`, `shell.openPath`, `showItemInFolder`
@@ -343,7 +401,7 @@ Current docs recommend avoiding `file://` and using custom protocols. Existing p
 
 ### Requirements
 
-- Detect `loadFile`, `loadURL('file://...')`, file URLs in HTML, and file-scheme custom routing.
+- Detect `loadFile`, `loadURL('file://...')`, file URLs in HTML, file-scheme custom routing, and fuse state that changes file protocol privileges.
 - Detect modern protocol APIs:
   - `protocol.handle`
   - `protocol.registerSchemesAsPrivileged`
@@ -357,14 +415,15 @@ Current docs recommend avoiding `file://` and using custom protocols. Existing p
   - `stream`
   - `bypassCSP`
   - `allowServiceWorkers`
-- Flag risky mappings from URL path/input to local filesystem without normalization/allowlist.
+- Flag risky mappings from URL path/input to local filesystem without normalization/allowlist. Treat ordinary `loadFile` as inventory/hardening unless paired with untrusted navigation, permissive file privileges, mixed origins, or path-influenced loads.
 
 ### Deliverables
 
-- `FILE_PROTOCOL_APP_CONTENT`
+- `FILE_PROTOCOL_APP_CONTENT_INVENTORY`
 - `CUSTOM_PROTOCOL_BYPASS_CSP`
 - `CUSTOM_PROTOCOL_FILE_PATH_TRAVERSAL_RISK`
-- `CUSTOM_PROTOCOL_MISSING_SECURE_STANDARD_FLAGS`
+- `CUSTOM_PROTOCOL_RISKY_PRIVILEGE_COMBINATION`
+- `CUSTOM_PROTOCOL_MISSING_SECURE_STANDARD_FLAGS` only when context requires those flags
 - Tests for `protocol.handle` and privilege configurations.
 
 ## 6.7 Electron fuses audit
@@ -382,6 +441,11 @@ Electron's current security docs include fuses. Upstream does not appear to chec
   - `EnableNodeCliInspectArguments`
   - `EnableEmbeddedAsarIntegrityValidation`
   - `OnlyLoadAppFromAsar`
+  - `EnableNodeOptionsEnvironmentVariable`
+  - `EnableCookieEncryption`
+  - `LoadBrowserProcessSpecificV8Snapshot`
+  - `GrantFileProtocolExtraPrivileges`
+  - `WasmTrapHandlers`
   - other current fuse options after docs review.
 
 ### Deliverables
@@ -390,7 +454,10 @@ Electron's current security docs include fuses. Upstream does not appear to chec
 - `FUSE_NODE_CLI_INSPECT_ENABLED_OR_UNKNOWN`
 - `FUSE_ASAR_INTEGRITY_NOT_ENABLED`
 - `FUSE_ONLY_LOAD_APP_FROM_ASAR_NOT_ENABLED`
-- Tests with sample fuse configs.
+- `FUSE_NODE_OPTIONS_ENV_ENABLED_OR_UNKNOWN`
+- `FUSE_GRANT_FILE_PROTOCOL_EXTRA_PRIVILEGES_ENABLED_OR_UNKNOWN`
+- `FUSE_COOKIE_ENCRYPTION_DISABLED_OR_UNKNOWN`
+- Tests with sample fuse configs and unknown-fuse-state behavior.
 
 ## 6.8 Permission handler quality
 
@@ -457,6 +524,7 @@ Generic Electron checklist scanning does not map app-specific renderer JS execut
   - `Range.createContextualFragment`
   - `iframe.srcdoc`
   - dynamic script creation
+  - variable-controlled `import()` / script URL construction
   - `eval`
   - `Function`
   - string timers
@@ -470,7 +538,7 @@ Generic Electron checklist scanning does not map app-specific renderer JS execut
   - templates/assets
   - AI-generated or AI-consumed content
   - deeplink/custom protocol input
-- Output hypotheses when a likely untrusted source and execution sink are near or linkable.
+- Output hypotheses when a likely untrusted source and execution sink are near or linkable. In v1 this is a shallow candidate, not a reachability claim.
 
 ### Deliverables
 
@@ -478,7 +546,7 @@ Generic Electron checklist scanning does not map app-specific renderer JS execut
 - `RENDERER_POTENTIAL_XSS_SINK`
 - `RENDERER_SANITIZER_WEAK_OR_UNKNOWN`
 - `CONTENT_VECTOR_LABEL`
-- Hypotheses JSONL entries for source/sink candidates.
+- Hypotheses JSONL entries for source/sink candidates using `candidate_chain` and `missing_evidence`.
 - Tests using fixture renderers.
 
 ## 6.11 Hypothesis ranking
@@ -509,7 +577,7 @@ Rank lower when:
 
 ## 7. CLI design
 
-Existing CLI should remain compatible, but add a modern output mode:
+Existing CLI should remain compatible. For MVP, prefer adding flags to the existing CLI rather than introducing a new subcommand. The future shape may become:
 
 ```bash
 electronegativity audit \
@@ -527,7 +595,7 @@ Profiles:
 - `full`: checklist + trust-map.
 - `canva-like`: optional future profile that emphasizes collaboration, file import/export, AI, and template/content vectors.
 
-If changing CLI shape is too invasive for MVP, add flags to existing CLI first and defer subcommands.
+The `audit` subcommand is explicitly non-MVP unless implementation proves cheap. MVP should add `--output-dir`, `--profile`, `--electron-version`, and structured output flags to the current command path first.
 
 ## 8. Test strategy
 
@@ -570,29 +638,63 @@ Exit criteria:
 - Known baseline test result is recorded.
 - No implementation begins before baseline is understood.
 
-### Phase 1 — Schema and output foundation
+### Phase 1 — Parser modernization and file classification
+
+- Audit parser support for modern JS/TS/JSX/TSX.
+- Add minified/bundle/vendor/generated detection.
+- Make parser failures non-fatal and visible in `parse_errors.jsonl`.
+
+Exit criteria:
+
+- Large bundled apps can be scanned without fatal parser failure.
+- File classification fields are available to all checks.
+
+### Phase 2 — Schema v1 and output foundation
 
 - Add stable finding/inventory/hypothesis schemas.
-- Add output directory writer.
+- Add deterministic IDs from `check_id + normalized file + location + evidence hash`.
+- Add output directory writer and SARIF mapping.
+- Define Electron Team context packet contract early, even if the harness wrapper lands later.
 - Preserve existing output compatibility.
 
 Exit criteria:
 
 - Existing checks can emit new schema.
-- Tests cover output format.
+- Tests cover output format and stable IDs.
 
-### Phase 2 — Version-aware defaults and renderer inventory
+### Phase 3 — Version and fuse context
 
-- Add `VersionContext`.
-- Update node/context/sandbox checks.
-- Add renderer container inventory including `WebContentsView`.
+- Add `VersionContext` with provenance/confidence.
+- Add fuse context with known/unknown state handling.
+- Update node/context/sandbox checks for version-aware behavior.
 
 Exit criteria:
 
 - Version-specific fixtures pass.
-- Inventory lists renderer containers and webPreferences.
+- Unknown version/fuse state is represented without fake precision.
 
-### Phase 3 — Preload and IPC audit
+### Phase 4 — Renderer container/component graph inventory
+
+- Add renderer container inventory including `WebContentsView` and `<webview>`.
+- Add `will-attach-webview` inventory/quality checks.
+- Link containers to preload, load targets, sessions, navigation handlers, webPreferences, and global sandbox state where statically possible.
+
+Exit criteria:
+
+- Inventory lists renderer containers and webPreferences.
+- Webview security controls are represented.
+
+### Phase 5 — Modernize existing checklist checks
+
+- Port existing checks to schema v1 and component graph.
+- Reclassify noisy checks into finding/hardening/inventory as appropriate.
+- Keep checklist parity deterministic before adding broad hypothesis logic.
+
+Exit criteria:
+
+- Current-doc checklist coverage is substantially complete for existing check families.
+
+### Phase 6 — Preload and IPC audit
 
 - Add preload exposure checks.
 - Add IPC inventory and sender validation checks.
@@ -601,48 +703,58 @@ Exit criteria:
 Exit criteria:
 
 - Safe/unsafe preload and IPC fixtures pass.
-- Hypotheses include bridge/IPC labels.
+- Hypotheses include bridge/IPC labels without claiming reachability.
 
-### Phase 4 — Navigation, protocol, permission, CSP quality
+### Phase 7 — Navigation, webview, protocol, permission, CSP quality
 
 - Improve navigation/window-open/openExternal checks.
 - Add custom protocol/file protocol checks.
-- Add fuse checks.
-- Improve permission and CSP quality checks.
+- Add permission and CSP quality checks.
 
 Exit criteria:
 
-- Checklist current-doc parity is substantially complete.
+- Quality checks distinguish safe allowlist patterns from allow-all behavior.
 
-### Phase 5 — Renderer JS sink and content-vector mapper
+### Phase 8 — Shallow renderer JS sink and content-vector mapper
 
 - Add renderer sink inventory.
 - Add source-vector labels.
-- Add source/sink hypotheses.
+- Add shallow source/sink candidate hypotheses.
 
 Exit criteria:
 
-- Fixture source/sink hypotheses are emitted and ranked.
+- Fixture source/sink hypotheses are emitted and ranked with `candidate_chain`, `missing_evidence`, and negative evidence.
 
-### Phase 6 — Harness integration
+### Phase 9 — Harness integration and large-app tuning
 
 - Add `electron_security_audit` wrapper/profile in bug bounty harness.
 - Import findings/inventory/hypotheses into Electron Team context.
-- Dry-run against Canva extracted app source.
+- Dry-run against Canva extracted app source and tune suppressions/ranking.
 
 Exit criteria:
 
 - Harness can run scanner and pass output to Electron Team without live app interaction.
+- Large bundled app scan produces useful signal without overwhelming false positives.
 
-## 10. Open questions for reviewer
+## 10. Review resolution notes
 
-1. Should we keep the old CLI as-is and add flags, or introduce a new `audit` subcommand?
-2. Should renderer JS sink mapping live in this repo, or should this repo only emit Electron-specific config/bridge facts and let AppMap own source/sink mapping?
-3. How much data-flow should we attempt in v1 versus heuristic source/sink co-location?
-4. What is the minimum useful schema for harness ingestion without overbuilding?
-5. Should fuses be `info`/hardening by default unless we can inspect packaged binary fuse state?
-6. Should `file://` usage be a finding, a hardening recommendation, or a hypothesis depending on context?
-7. How do we prevent high false-positive rates on minified/bundled production JS?
+Codex review completed on 2026-05-18. Accepted changes:
+
+- Added version provenance/confidence and unknown-version behavior.
+- Added severity/confidence policy and classification separation.
+- Added false-positive policy for minified/bundled/vendor code.
+- Re-scoped renderer sink mapping to shallow candidate hypotheses, not data-flow proof.
+- Clarified AppMap ownership: scanner emits entity/relationship IDs; harness resolves AppMap refs.
+- Added webview `will-attach-webview` checks.
+- Expanded fuse coverage with current Electron fuse names.
+- Reclassified ordinary `file://`/`loadFile` use as inventory/hardening unless risky context exists.
+- Moved parser/file classification earlier in the implementation sequence.
+
+Remaining open questions:
+
+1. How much source-map support is required for v1 large-app tuning?
+2. Should the first harness adapter live in this repo as an example, or only in `bug_bounty_harness`?
+3. Which Electron Team context packet fields are strictly required for the first Canva dry run?
 
 ## 11. Acceptance criteria
 
