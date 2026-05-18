@@ -1,9 +1,9 @@
-# Elecronegativity Modernization Spec
+# Electronegativity Modernization Spec
 
 Status: draft
 Owner: Ghost / Ryushe
 Upstream: https://github.com/doyensec/electronegativity
-Local repo: `/home/ryushe/projects/elecronegativity`
+Local repo: `/home/ryushe/projects/electronegativity`
 Last updated: 2026-05-18
 
 ## Goal
@@ -19,7 +19,7 @@ Static scanners are more consistent than LLM agents for known Electron checklist
 This repo should become the repeatable baseline layer:
 
 ```text
-AppMap -> Elecronegativity scanner -> Electron Team agents -> single-agent trace -> dynamic validation
+AppMap -> Electronegativity scanner -> Electron Team agents -> single-agent trace -> dynamic validation
 ```
 
 ## Scope
