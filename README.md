@@ -55,6 +55,7 @@ $ electronegativity -h
 | -u, --upgrade <current version..target version> | run Electron upgrade checks, eg -u 7..8 to check upgrade from Electron 7 to 8 |
 | -e, --electron-version <version> | assume the set Electron version, overriding the detected one, eg -e 7.0.0 to treat as using Electron 7 |
 | -p, --parser-plugins <plugins> | specify additional parser plugins to use separated by commas, e.g. -p optionalChaining |
+| --parse-errors-output <file\|dir> | write parser errors to JSONL, or to parse_errors.jsonl in the specified directory |
 | -h, --help   | output usage information                          |
 
 

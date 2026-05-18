@@ -20,4 +20,8 @@ export class LoaderFile extends Loader {
     const buffer = read_file(filename);
     return buffer;
   }
+
+  file_exists(filename) {
+    return fs.existsSync(filename);
+  }
 }

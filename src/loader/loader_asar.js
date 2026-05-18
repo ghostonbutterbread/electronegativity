@@ -16,6 +16,7 @@ export class LoaderAsar extends Loader {
     this.archive = archive;
 
     const archived_files = asar.listPackage(archive);
+    this._archivedFiles = new Set(archived_files.map(file => file.startsWith(path.sep) ? file.substr(1) : file));
     logger.debug(`Files in ASAR archive: ${archived_files}`);
 
     for (const file of archived_files) {
@@ -67,5 +68,10 @@ export class LoaderAsar extends Loader {
     logger.debug(`Extracting file: ${filename}`);
     const buffer = asar.extractFile(this.archive, filename);
     return buffer;
+  }
+
+  file_exists(filename) {
+    const f = filename.startsWith(path.sep) ? filename.substr(1) : filename;
+    return this._archivedFiles && this._archivedFiles.has(f);
   }
 }

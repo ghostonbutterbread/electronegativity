@@ -2,13 +2,59 @@ import cliProgress from 'cli-progress';
 import Table from 'cli-table3';
 import chalk from 'chalk';
 import logger from 'winston';
+import fs from 'fs';
+import path from 'path';
 
 import _i18n from './locales/i18n';
 import { LoaderFile, LoaderAsar, LoaderDirectory } from './loader';
-import { Parser } from './parser';
+import { Parser, parseErrorRecord } from './parser';
 import { Finder } from './finder';
 import { GlobalChecks, severity, confidence } from './finder';
 import { extension, input_exists, is_directory, writeIssues, getRelativePath } from './util';
+
+const PARSE_ERRORS_FILENAME = 'parse_errors.jsonl';
+
+function pathEndsWithSeparator(output) {
+  return output.endsWith('/') || output.endsWith('\\');
+}
+
+function parseErrorsOutputPath(output) {
+  if (!output)
+    return null;
+
+  const existingOutput = input_exists(output);
+  if (existingOutput)
+    return is_directory(output) ? path.join(output, PARSE_ERRORS_FILENAME) : output;
+
+  if (pathEndsWithSeparator(output))
+    return path.join(output, PARSE_ERRORS_FILENAME);
+
+  return output;
+}
+
+function defaultParseErrorsOutputPath(output) {
+  if (!output)
+    return null;
+
+  const existingOutput = input_exists(output);
+  if (existingOutput && is_directory(output))
+    return path.join(output, PARSE_ERRORS_FILENAME);
+
+  if (pathEndsWithSeparator(output))
+    return path.join(output, PARSE_ERRORS_FILENAME);
+
+  return path.join(path.dirname(output), PARSE_ERRORS_FILENAME);
+}
+
+function writeParseErrors(output, parseErrors) {
+  const outputPath = parseErrorsOutputPath(output);
+  if (!outputPath)
+    return;
+
+  const body = parseErrors.map(error => JSON.stringify(error)).join('\n');
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  fs.writeFileSync(outputPath, body ? `${body}\n` : '');
+}
 
 export default async function run(options, forCli = false) {
 
@@ -63,7 +109,11 @@ export default async function run(options, forCli = false) {
   options.excludeFromScan = (options.excludeFromScan || []).map(c => c.toLowerCase());
 
   // Parser options initialization
-  const parser = new Parser(false, true);
+  const scannerRoot = is_directory(options.input) ? options.input : path.dirname(options.input);
+  const parser = new Parser(false, true, {
+    scannerRoot,
+    sourceMapExists: file => loader.file_exists(file)
+  });
 
   if (options.parserPlugins && Array.isArray(options.parserPlugins) && options.parserPlugins.length > 0) {
     options.parserPlugins.forEach(plugin => parser.addPlugin(plugin));
@@ -83,6 +133,8 @@ export default async function run(options, forCli = false) {
   // Results' table initialization
   let issues = [];
   let errors = [];
+  let parseErrors = [];
+  let fileClassifications = {};
   let table = new Table({
     head: [__('tableCheckId'), __('tableAffectedFile'), __('tableLocation'), __('tableDescription')],
     colWidths:[undefined, undefined, undefined, 50], // necessary for wordWrap
@@ -116,13 +168,18 @@ export default async function run(options, forCli = false) {
         if (warnings !== undefined) {
           for (const warning of warnings) {
             errors.push({ file: file, message: warning.message, tolerable: true });
+            parseErrors.push(parseErrorRecord(file, parser.getFileClassification(file), warning));
           }
         }
 
-        const result = await finder.find(file, data, type, content, null, electronVersion);
+        fileClassifications[file] = parser.getFileClassification(file);
+        const result = await finder.find(file, data, type, content, null, electronVersion, fileClassifications[file]);
         issues.push(...result);
       } catch (error) {
+        const classification = parser.getFileClassification(file);
+        fileClassifications[file] = classification;
         errors.push({ file: file, message: error.message, tolerable: false });
+        parseErrors.push(parseErrorRecord(file, classification, error));
       }
     }
 
@@ -146,7 +203,7 @@ export default async function run(options, forCli = false) {
   // Second pass of checks (in "GlobalChecks")
   // Now that we have all the "naive" findings we may analyze them further to sort out false negatives
   // and false positives before presenting them in the final report (e.g. CSP)
-  issues = await globalChecker.getResults(issues, options.output);
+  issues = await globalChecker.getResults(issues, options.output, fileClassifications);
 
   // Adjust visibility
   issues = issues.filter(i => !i.hasOwnProperty('visibility') || (!i.visibility.inlineDisabled && !i.visibility.globalCheckDisabled));
@@ -178,6 +235,8 @@ export default async function run(options, forCli = false) {
   if (options.output)
     writeIssues(options.input, options.isRelative, options.output, issues, options.isSarif);
 
+  writeParseErrors(options.parseErrorsOutput || defaultParseErrorsOutputPath(options.output), parseErrors);
+
   if (forCli) {
     if (rows.length > 0) {
       table.push(...rows);
@@ -189,6 +248,8 @@ export default async function run(options, forCli = false) {
     globalChecks: globalChecker._enabled_checks.length,
     atomicChecks: finder._enabled_checks.length,
     errors,
+    parseErrors,
+    fileClassifications,
     issues
   };
 }

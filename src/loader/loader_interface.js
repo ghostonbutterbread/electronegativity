@@ -11,4 +11,8 @@ export class Loader {
   load_buffer(filename) {
     return undefined;
   }
+
+  file_exists(filename) {
+    return this._loaded.has(filename);
+  }
 }

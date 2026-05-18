@@ -2,6 +2,35 @@ import { ELECTRON_GLOBAL_UPGRADE_CHECKS } from './checks/GlobalChecks/ElectronGl
 import { GLOBAL_CHECKS } from './checks/GlobalChecks';
 import chalk from 'chalk';
 
+function hasFileClassification(issue) {
+  return issue && issue.fileClassification;
+}
+
+function classificationForFile(file, sourceIssues, context = {}) {
+  if (file && file !== 'N/A') {
+    const byIssue = sourceIssues.find(issue => issue.file === file && hasFileClassification(issue));
+    if (byIssue)
+      return byIssue.fileClassification;
+
+    if (context.fileClassifications && context.fileClassifications[file])
+      return context.fileClassifications[file];
+  }
+
+  const firstClassified = sourceIssues.find(hasFileClassification);
+  return firstClassified ? firstClassified.fileClassification : null;
+}
+
+function attachFileClassification(issue, sourceIssues, context) {
+  if (!issue || issue.fileClassification)
+    return issue;
+
+  const classification = classificationForFile(issue.file, sourceIssues, context);
+  if (classification)
+    issue.fileClassification = classification;
+
+  return issue;
+}
+
 export class GlobalChecks {
     constructor(customScan, excludeFromScan, electronUpgrade) {
         let candidateChecks = Array.from(GLOBAL_CHECKS);
@@ -65,10 +94,14 @@ export class GlobalChecks {
       this.dependencies = this.dependencies.map(dependency => dependency.toLowerCase());
     }
 
-    async getResults(issues, output) {
+    async getResults(issues, output, fileClassifications = {}) {
       var result = [];
       // we use the `processed` flag to track down which issues will be left untouched by the global checks (i.e. non-dependencies)
-      issues.forEach(issue => issue.processed = false);
+      issues.forEach(issue => {
+        if (!issue.fileClassification && fileClassifications[issue.file])
+          issue.fileClassification = fileClassifications[issue.file];
+        issue.processed = false;
+      });
 
       for (const check of this._constructed_checks) {
 
@@ -79,7 +112,8 @@ export class GlobalChecks {
 
         var targetedIssues = issues.filter(issue => check.depends.includes(issue.constructorName) && !issue.visibility.inlineDisabled);
 
-        result = [...result, ...await check.perform(targetedIssues, output)];
+        const checkResults = await check.perform(targetedIssues, output, { fileClassifications });
+        result = [...result, ...checkResults.map(issue => attachFileClassification(issue, targetedIssues, { fileClassifications }))];
       }
 
       // in the end we merge the results of the global checks with the other untouched checks

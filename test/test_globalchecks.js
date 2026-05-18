@@ -64,3 +64,72 @@ describe('GlobalChecks', async () => {
     }).timeout(8000);
   }
 });
+
+describe('GlobalChecks file classification', () => {
+  it('attaches classification map entries before checks run', async () => {
+    const classification = {
+      is_bundle: false,
+      is_minified: false,
+      parser_status: 'ok'
+    };
+    const issue = {
+      file: 'src/main.js',
+      constructorName: 'DependencyCheck',
+      visibility: {
+        inlineDisabled: false
+      }
+    };
+    const globalChecker = new GlobalChecks([], [], null);
+    let sawClassification = false;
+
+    globalChecker._constructed_checks = [{
+      depends: ['DependencyCheck'],
+      perform: async (issues, output, context) => {
+        issues[0].fileClassification.should.equal(classification);
+        context.fileClassifications['src/main.js'].should.equal(classification);
+        sawClassification = true;
+        return issues;
+      }
+    }];
+
+    let result = await globalChecker.getResults([issue], null, {
+      'src/main.js': classification
+    });
+
+    sawClassification.should.equal(true);
+    result[0].fileClassification.should.equal(classification);
+  });
+
+  it('attaches classification to replacement findings from global checks', async () => {
+    const classification = {
+      is_bundle: false,
+      is_minified: false,
+      parser_status: 'ok'
+    };
+    const issue = {
+      file: 'src/main.js',
+      constructorName: 'DependencyCheck',
+      visibility: {
+        inlineDisabled: false
+      },
+      fileClassification: classification
+    };
+    const globalChecker = new GlobalChecks([], [], null);
+
+    globalChecker._constructed_checks = [{
+      depends: ['DependencyCheck'],
+      perform: async () => [{
+        file: 'src/main.js',
+        constructorName: 'SyntheticGlobalCheck',
+        visibility: { inlineDisabled: false },
+        id: 'SYNTHETIC_GLOBAL_CHECK'
+      }]
+    }];
+
+    let result = await globalChecker.getResults([issue], null, {
+      'src/main.js': classification
+    });
+
+    result[0].fileClassification.should.equal(classification);
+  });
+});

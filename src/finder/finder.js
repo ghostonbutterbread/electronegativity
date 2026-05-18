@@ -70,7 +70,7 @@ export class Finder {
     }
   }
 
-  async find(file, data, type, content, use_only_checks = null, electronVersion = null) {
+  async find(file, data, type, content, use_only_checks = null, electronVersion = null, fileClassification = null) {
     // If the loader didn't detect the Electron version, assume the first one. Not knowing the version, we have to assume the worst (i.e.
     // all options defaulting to insecure values). By always setting the version here, the code in the checkers is simplified as they now
     // don't have to handle the case of unknown versions.
@@ -89,6 +89,8 @@ export class Finder {
     const fileLines = content.toString().split('\n');
     const issues = [];
     const rootData = data;
+    if (rootData && fileClassification)
+      rootData.fileClassification = fileClassification;
 
     switch (type) {
       case sourceTypes.JAVASCRIPT:
@@ -96,13 +98,13 @@ export class Finder {
           enter: (node) => {
             rootData.Scope.updateFunctionScope(rootData.astParser.getNode(node), "enter");
             for (const check of checks) {
-              const matches = check.match(rootData.astParser.getNode(node), rootData.astParser, rootData.Scope, defaults, electronVersion);
+              const matches = check.match(rootData.astParser.getNode(node), rootData.astParser, rootData.Scope, defaults, electronVersion, fileClassification);
               if (matches) {
                 for(const m of matches) {
                   const firstLineSample = getSample(fileLines, 0);
                   const matchedLineSample = getSample(fileLines, m.line - 1);
                   const visibility = isDisabledByInlineComment(firstLineSample, matchedLineSample, check, sourceTypes.JAVASCRIPT);
-                  const issue = { file, sample: matchedLineSample, location: {line: m.line, column: m.column}, id: m.id, description: m.description, properties: m.properties, severity: m.severity, confidence: m.confidence, manualReview: m.manualReview, shortenedURL: m.shortenedURL, visibility: visibility, constructorName: check.constructor.name };
+                  const issue = { file, sample: matchedLineSample, location: {line: m.line, column: m.column}, id: m.id, description: m.description, properties: m.properties, severity: m.severity, confidence: m.confidence, manualReview: m.manualReview, shortenedURL: m.shortenedURL, visibility: visibility, constructorName: check.constructor.name, fileClassification };
                   issues.push(issue);
                 }
               }
@@ -116,13 +118,13 @@ export class Finder {
         break;
       case sourceTypes.HTML:
         for (const check of checks) {
-          const matches = check.match(data, content, defaults, electronVersion);
+          const matches = check.match(data, content, defaults, electronVersion, fileClassification);
           if(matches){
             for(const m of matches) {
               const firstLineSample = getSample(fileLines, 0);
               const matchedLineSample = getSample(fileLines, m.line - 1);
               const visibility = isDisabledByInlineComment(firstLineSample, matchedLineSample, check, sourceTypes.HTML);
-              const issue = {file, sample: matchedLineSample, location: {line: m.line, column: m.column}, id: m.id, description: m.description, properties: m.properties, severity: m.severity, confidence: m.confidence, manualReview: m.manualReview, shortenedURL: m.shortenedURL, visibility: visibility, constructorName: check.constructor.name };
+              const issue = {file, sample: matchedLineSample, location: {line: m.line, column: m.column}, id: m.id, description: m.description, properties: m.properties, severity: m.severity, confidence: m.confidence, manualReview: m.manualReview, shortenedURL: m.shortenedURL, visibility: visibility, constructorName: check.constructor.name, fileClassification };
               issues.push(issue);
             }
           }
@@ -130,11 +132,11 @@ export class Finder {
         break;
       case sourceTypes.JSON:
         for (const check of checks) {
-          const matches = await check.match(data, defaults, electronVersion);
+          const matches = await check.match(data, defaults, electronVersion, fileClassification);
           if (matches) {
             for(const m of matches) {
               const sample = getSample(fileLines, m.line - 1);
-              const issue = {file, sample, location: {line: m.line, column: m.column}, id: m.id, description: m.description, properties: m.properties, severity: m.severity, confidence: m.confidence, manualReview: m.manualReview, shortenedURL: m.shortenedURL, visibility: { excludesGlobal: [], inlineDisabled: false, globalDisabled: false, globalCheckDisabled: false }, constructorName: check.constructor.name };
+              const issue = {file, sample, location: {line: m.line, column: m.column}, id: m.id, description: m.description, properties: m.properties, severity: m.severity, confidence: m.confidence, manualReview: m.manualReview, shortenedURL: m.shortenedURL, visibility: { excludesGlobal: [], inlineDisabled: false, globalDisabled: false, globalCheckDisabled: false }, constructorName: check.constructor.name, fileClassification };
               issues.push(issue);
             }
           }

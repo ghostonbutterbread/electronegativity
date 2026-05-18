@@ -25,6 +25,28 @@ logger.add(logger.transports.Console, {colorize : true, level : 'silly'});
 
 let check_tests = "test/checks/AtomicChecks";
 
+describe('Finder file classification', () => {
+  it('attaches classification to emitted issues', async () => {
+    const file = path.join(check_tests, 'NODE_INTEGRATION_JS_CHECK_13_1.js');
+    let loader = new LoaderFile();
+    loader.load(file);
+    let filename = [...loader.list_files][0];
+    let parser = new Parser(false, true);
+    const [type, data, content] = parser.parse(filename, loader.load_buffer(filename));
+    let finder = new Finder(null, null, null);
+    let classification = {
+      is_bundle: false,
+      is_minified: false,
+      parser_status: 'ok'
+    };
+
+    let result = await finder.find(filename, data, type, content, ['NODE_INTEGRATION_JS_CHECK'], null, classification);
+
+    result.length.should.be.above(0);
+    result[0].fileClassification.should.equal(classification);
+  });
+});
+
 describe('Finder', () => {
   let finder = new Finder(null, null, '4..8');
 

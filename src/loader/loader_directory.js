@@ -1,3 +1,4 @@
+import fs from 'fs';
 import { read_file, list_files } from '../util';
 import { Loader } from './loader_interface';
 import { findOldestElectronVersion } from "../util/electron_version";
@@ -41,5 +42,9 @@ export class LoaderDirectory extends Loader {
   load_buffer(filename) {
     const buffer = read_file(filename);
     return buffer;
+  }
+
+  file_exists(filename) {
+    return fs.existsSync(filename);
   }
 }

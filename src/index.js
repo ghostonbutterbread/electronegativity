@@ -27,6 +27,7 @@ async function main() {
       .option(__('upgradeOption'), __('upgradeOptionDescription'))
       .option(__('electronVersionOption'), __('electronVersionOptionDescription'))
       .option(__('parserPluginsOption'), __('parserPluginsOptionDescription'))
+      .option('--parse-errors-output <file|dir>', 'write parser errors to a JSONL file, or to parse_errors.jsonl in the specified directory')
       .parse(process.argv);
 
   const forCli = !program.output;
@@ -98,7 +99,8 @@ async function main() {
     isVerbose: program.verbose,
     electronUpgrade: program.upgrade,
     electronVersionOverride: program.electronVersion,
-    parserPlugins: program.parserPlugins
+    parserPlugins: program.parserPlugins,
+    parseErrorsOutput: program.parseErrorsOutput
   }, forCli).catch(error => {
     console.error(chalk.red(error.stack));
     process.exit(1);
