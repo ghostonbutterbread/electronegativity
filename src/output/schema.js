@@ -44,7 +44,15 @@ const INVENTORY_KEY_FILE_PARTS = {
   navigation_handler: [2],
   webview_attach_handler: [2],
   global_sandbox: [1],
-  ipc_channel: [1]
+  ipc_channel: [1],
+  external_open: [1],
+  file_protocol_usage: [1],
+  protocol_scheme: [1],
+  protocol_handler: [1],
+  permission_handler: [1],
+  csp_policy: [1],
+  renderer_sink: [1],
+  content_vector: [1]
 };
 
 function normalizeInventoryKey(input, key) {
@@ -465,8 +473,38 @@ export function buildInventory(input, fileClassifications, componentInventory = 
   };
 }
 
-export function buildHypotheses() {
-  return [];
+function normalizeHypothesisCandidate(input, hypothesis) {
+  const normalized = Object.assign({}, hypothesis);
+  normalized.type = 'hypothesis';
+  normalized.classification = 'hypothesis';
+  normalized.validation_state = normalized.validation_state || 'static_only';
+  normalized.candidate_chain = (normalized.candidate_chain || []).map(step => {
+    const normalizedStep = Object.assign({}, step);
+    if (normalizedStep.file)
+      normalizedStep.file = normalizeFileForDisplay(input, normalizedStep.file);
+    return normalizedStep;
+  });
+
+  const firstFileStep = normalized.candidate_chain.find(step => step.file);
+  if (firstFileStep)
+    normalized.file = firstFileStep.file;
+
+  normalized.electron_component = normalized.electron_component || 'renderer';
+  normalized.affected_window_or_channel = normalized.affected_window_or_channel || 'unknown';
+  normalized.trust_boundary = normalized.trust_boundary || 'content_to_renderer_script';
+  normalized.hypothesis_id = stableHash(stableStringify(normalized.candidate_chain) + (normalized.title || ''));
+
+  return normalized;
+}
+
+export function buildHypotheses(input = null, candidates = []) {
+  return candidates.map(candidate => normalizeHypothesisCandidate(input, candidate)).sort((a, b) => {
+    const rankCompare = (b.rank || 0) - (a.rank || 0);
+    if (rankCompare !== 0)
+      return rankCompare;
+
+    return a.hypothesis_id.localeCompare(b.hypothesis_id);
+  });
 }
 
 export function buildFindingsDocument(findings, generatedAt) {

@@ -10,7 +10,7 @@ import { LoaderFile, LoaderAsar, LoaderDirectory } from './loader';
 import { Parser, parseErrorRecord } from './parser';
 import { Finder } from './finder';
 import { GlobalChecks, severity, confidence } from './finder';
-import { RendererInventoryCollector, PreloadIpcCollector, isPreloadIpcAuditCheckName } from './inventory';
+import { RendererInventoryCollector, PreloadIpcCollector, StaticTrustCollector, isPreloadIpcAuditCheckName, isStaticTrustAuditCheckName } from './inventory';
 import { buildFindings, buildHypotheses, buildInventory, buildRunMetadata, buildSarifDocument, contextPacketFilename, writeOutputDirectory } from './output';
 import { createFuseContext, createVersionContext } from './util/electron_context';
 import { extension, input_exists, is_directory, writeIssues, getRelativePath } from './util';
@@ -140,6 +140,8 @@ export default async function run(options, forCli = false) {
   if (options.excludeFromScan.length > 0) options.excludeFromScan = options.excludeFromScan.filter(r => !r.includes('globalcheck'));
   options.customScan = options.customScan.filter(r => !isPreloadIpcAuditCheckName(r));
   options.excludeFromScan = options.excludeFromScan.filter(r => !isPreloadIpcAuditCheckName(r));
+  options.customScan = options.customScan.filter(r => !isStaticTrustAuditCheckName(r));
+  options.excludeFromScan = options.excludeFromScan.filter(r => !isStaticTrustAuditCheckName(r));
 
   // Finder initialization
   const noAtomicChecks = requestedCustomScan.length > 0 && options.customScan.length === 0;
@@ -153,6 +155,10 @@ export default async function run(options, forCli = false) {
   let fileClassifications = {};
   const rendererInventoryCollector = new RendererInventoryCollector();
   const preloadIpcCollector = new PreloadIpcCollector({
+    customScan: requestedCustomScan,
+    excludeFromScan: requestedExcludeFromScan
+  });
+  const staticTrustCollector = new StaticTrustCollector({
     customScan: requestedCustomScan,
     excludeFromScan: requestedExcludeFromScan
   });
@@ -197,6 +203,7 @@ export default async function run(options, forCli = false) {
         const result = await finder.find(file, data, type, content, null, versionContext, fileClassifications[file]);
         rendererInventoryCollector.collect(file, type, data, content);
         preloadIpcCollector.collect(file, type, data, content, fileClassifications[file]);
+        staticTrustCollector.collect(file, type, data, content, fileClassifications[file]);
         issues.push(...result);
       } catch (error) {
         const classification = parser.getFileClassification(file);
@@ -230,6 +237,8 @@ export default async function run(options, forCli = false) {
 
   const preloadIpcResults = preloadIpcCollector.buildAuditResults();
   issues.push(...preloadIpcResults.issues);
+  const staticTrustResults = staticTrustCollector.buildAuditResults();
+  issues.push(...staticTrustResults.issues);
 
   // Adjust visibility
   issues = issues.filter(i => !i.hasOwnProperty('visibility') || (!i.visibility.inlineDisabled && !i.visibility.globalCheckDisabled));
@@ -244,10 +253,10 @@ export default async function run(options, forCli = false) {
   const findings = buildFindings(options.input, issues, versionContext, fuseContext);
   const rendererInventory = rendererInventoryCollector.buildComponentInventory();
   const inventory = buildInventory(options.input, fileClassifications, {
-    records: rendererInventory.records.concat(preloadIpcResults.componentInventory.records),
-    relationships: rendererInventory.relationships.concat(preloadIpcResults.componentInventory.relationships)
+    records: rendererInventory.records.concat(preloadIpcResults.componentInventory.records, staticTrustResults.componentInventory.records),
+    relationships: rendererInventory.relationships.concat(preloadIpcResults.componentInventory.relationships, staticTrustResults.componentInventory.relationships)
   });
-  const hypotheses = buildHypotheses();
+  const hypotheses = buildHypotheses(options.input, staticTrustResults.hypotheses);
   const sarif = buildSarifDocument(options.isRelative ? options.input : null, findings);
 
   let rows = [];
