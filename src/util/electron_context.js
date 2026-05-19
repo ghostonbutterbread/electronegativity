@@ -150,10 +150,23 @@ export function issueClassificationForDefaultBehavior(setting, defaultBehavior) 
   return defaultBehavior.value === SECURE_SETTING_VALUES[setting] ? 'hardening' : 'finding';
 }
 
+export function buildIssueProperties(options = {}) {
+  const properties = Object.assign({}, options.properties || {});
+
+  properties.issueType = options.issueType || properties.issueType || 'finding';
+  properties.issueClassification = options.issueClassification || properties.issueClassification || 'finding';
+
+  if (Object.prototype.hasOwnProperty.call(options, 'versionContext'))
+    properties.versionContext = options.versionContext;
+
+  return properties;
+}
+
 export function buildCheckProperties(setting, versionContext, options = {}) {
-  return {
-    issueType: options.issueType || 'finding',
-    issueClassification: options.issueClassification || 'finding',
+  return buildIssueProperties({
+    properties: options.properties,
+    issueType: options.issueType,
+    issueClassification: options.issueClassification,
     versionContext: buildCheckVersionContext(setting, versionContext)
-  };
+  });
 }

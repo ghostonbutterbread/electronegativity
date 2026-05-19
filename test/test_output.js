@@ -124,6 +124,55 @@ describe('Structured output', () => {
     parseJsonl(path.join(outputDir, 'parse_errors.jsonl')).length.should.equal(0);
   });
 
+  it('classifies checklist inventory and hardening results in schema v1 without dropping legacy custom-scan output', async function () {
+    this.timeout(10000);
+
+    const outputRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'electro-checklist-phase5-'));
+    const outputDir = path.join(outputRoot, 'audit-out');
+    const legacyOutput = path.join(outputRoot, 'results.csv');
+    const packageFile = path.join(outputRoot, 'package.json');
+
+    fs.writeFileSync(packageFile, JSON.stringify({
+      dependencies: {
+        electron: '^20.0.0'
+      },
+      scripts: {
+        start: 'ELECTRON_DISABLE_SECURITY_WARNINGS=1 electron .'
+      }
+    }, null, 2));
+
+    const result = await runFixture(packageFile, {
+      customScan: ['electronversionjsoncheck', 'securitywarningsdisabledjsoncheck'],
+      output: legacyOutput,
+      outputDir,
+      targetId: 'phase5-package'
+    });
+
+    await waitForFile(legacyOutput);
+    const findingsDoc = parseJson(path.join(outputDir, 'findings.json'));
+    const versionFinding = findingsDoc.findings.find(finding => finding.check_id === 'ELECTRON_VERSION_JSON_CHECK');
+    const securityWarningsFinding = findingsDoc.findings.find(finding => finding.check_id === 'SECURITY_WARNINGS_DISABLED_JSON_CHECK');
+    const legacyCsv = fs.readFileSync(legacyOutput, 'utf8');
+    const legacyRows = legacyCsv.trim().split(os.EOL).slice(1);
+
+    result.issues.length.should.equal(2);
+    findingsDoc.findings.length.should.equal(2);
+    legacyRows.length.should.equal(2);
+
+    should.exist(versionFinding);
+    versionFinding.type.should.equal('finding');
+    versionFinding.classification.should.equal('inventory');
+    versionFinding.severity.should.equal('info');
+
+    should.exist(securityWarningsFinding);
+    securityWarningsFinding.type.should.equal('finding');
+    securityWarningsFinding.classification.should.equal('hardening');
+    securityWarningsFinding.severity.should.equal('info');
+
+    legacyCsv.should.contain('ELECTRON_VERSION_JSON_CHECK');
+    legacyCsv.should.contain('SECURITY_WARNINGS_DISABLED_JSON_CHECK');
+  });
+
   it('preserves legacy relative SARIF invocation metadata in the structured output directory', async function () {
     this.timeout(10000);
 

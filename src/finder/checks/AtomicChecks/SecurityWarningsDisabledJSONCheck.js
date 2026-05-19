@@ -1,6 +1,7 @@
 import linenumber from 'linenumber';
 import { severity, confidence } from '../../attributes';
 import { sourceTypes } from '../../../parser/types';
+import { buildIssueProperties } from '../../../util/electron_context';
 
 export default class SecurityWarningsDisabledJSONCheck {
   constructor() {
@@ -27,7 +28,17 @@ export default class SecurityWarningsDisabledJSONCheck {
 
           if (res) {
             let ln = linenumber(content.text, npmScripts[script]);
-            location.push({ line: ln[0].line, column: 0, id: this.id, description: this.description, shortenedURL: this.shortenedURL, severity: severity.INFORMATIONAL, confidence: confidence.CERTAIN, manualReview: false });
+            location.push({
+              line: ln[0].line,
+              column: 0,
+              id: this.id,
+              description: this.description,
+              shortenedURL: this.shortenedURL,
+              severity: severity.INFORMATIONAL,
+              confidence: confidence.CERTAIN,
+              manualReview: false,
+              properties: buildIssueProperties({ issueClassification: 'hardening' })
+            });
           }
 
         }
@@ -43,7 +54,17 @@ export default class SecurityWarningsDisabledJSONCheck {
 
           if (res) {
             let ln = linenumber(content.text, npmConfig[config]);
-            location.push({ line: ln[0].line, column: 0, id: this.id, description: this.description, shortenedURL: this.shortenedURL, severity: severity.INFORMATIONAL, confidence: confidence.CERTAIN, manualReview: false });
+            location.push({
+              line: ln[0].line,
+              column: 0,
+              id: this.id,
+              description: this.description,
+              shortenedURL: this.shortenedURL,
+              severity: severity.INFORMATIONAL,
+              confidence: confidence.CERTAIN,
+              manualReview: false,
+              properties: buildIssueProperties({ issueClassification: 'hardening' })
+            });
           }
 
         }

@@ -86,6 +86,36 @@ describe('Finder file classification', () => {
     issues.length.should.equal(1);
     issues[0].fileClassification.parser_status.should.equal('ok');
   });
+
+  it('classifies Electron version package.json checks as inventory while preserving version metadata', async () => {
+    const issues = await findJson('{\"dependencies\":{\"electron\":\"^20.0.0\"}}', 'ELECTRON_VERSION_JSON_CHECK');
+
+    issues.length.should.equal(1);
+    issues[0].severity.name.should.equal('INFORMATIONAL');
+    issues[0].manualReview.should.equal(false);
+    issues[0].properties.issueType.should.equal('finding');
+    issues[0].properties.issueClassification.should.equal('inventory');
+    issues[0].properties.versionNumber.should.equal('20.0.0');
+  });
+
+  it('classifies disabled security warning flags as hardening in JSON and JS checks', async () => {
+    const jsonIssues = await findJson(`{
+      "scripts": {
+        "start": "ELECTRON_DISABLE_SECURITY_WARNINGS=1 electron ."
+      }
+    }`, 'SECURITY_WARNINGS_DISABLED_JSON_CHECK');
+    const jsIssues = await findSnippet('process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = true;', 'SECURITY_WARNINGS_DISABLED_JS_CHECK');
+
+    jsonIssues.length.should.equal(1);
+    jsonIssues[0].severity.name.should.equal('INFORMATIONAL');
+    jsonIssues[0].properties.issueType.should.equal('finding');
+    jsonIssues[0].properties.issueClassification.should.equal('hardening');
+
+    jsIssues.length.should.equal(1);
+    jsIssues[0].severity.name.should.equal('INFORMATIONAL');
+    jsIssues[0].properties.issueType.should.equal('finding');
+    jsIssues[0].properties.issueClassification.should.equal('hardening');
+  });
 });
 
 describe('Finder version-aware defaults', () => {
