@@ -1,7 +1,7 @@
 import fs from 'fs';
 import { read_file, list_files } from '../util';
 import { Loader } from './loader_interface';
-import { findOldestElectronVersion } from "../util/electron_version";
+import { findOldestElectronVersionWithSource } from "../util/electron_version";
 
 export class LoaderDirectory extends Loader {
   constructor() {
@@ -26,13 +26,19 @@ export class LoaderDirectory extends Loader {
       }
     };
 
-    const electronVersion = await findOldestElectronVersion({
-      pjsonData: readAndOptionallyParse('package.json', true),
+    const pjsonData = readAndOptionallyParse('package.json', true);
+    const plockData = readAndOptionallyParse('package-lock.json', true);
+    const yarnLockData = readAndOptionallyParse('yarn.lock', false);
+    const electronVersion = await findOldestElectronVersionWithSource({
+      pjsonData,
       rootPath: dir,
-      plockData: readAndOptionallyParse('package-lock.json', true),
-      yarnLockData: readAndOptionallyParse('yarn.lock', false),
+      plockData,
+      yarnLockData,
     });
-    if (electronVersion) this._electronVersion = electronVersion;
+    if (electronVersion) {
+      this._electronVersion = electronVersion.version;
+      this._electronVersionSource = electronVersion.source;
+    }
   }
 
   async stash() {

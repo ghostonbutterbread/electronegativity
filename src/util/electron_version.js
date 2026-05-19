@@ -17,6 +17,31 @@ export function oldestVersion(versions) {
   return sortedVersions.length > 0 ? minMatchingVersion(sortedVersions[0]) : undefined;
 }
 
+function sourceRank(source) {
+  switch (source) {
+    case 'package_json':
+      return 0;
+    case 'lockfile':
+      return 1;
+    case 'installed_package':
+      return 2;
+    default:
+      return 3;
+  }
+}
+
+function oldestVersionWithSource(candidates) {
+  candidates = (candidates || []).filter(candidate => candidate && candidate.version);
+  candidates.sort((a, b) => {
+    const versionCompare = compare(a.version, b.version);
+    if (versionCompare !== 0)
+      return versionCompare;
+
+    return sourceRank(a.source) - sourceRank(b.source);
+  });
+  return candidates.length > 0 ? candidates[0] : undefined;
+}
+
 export function findElectronVersionFromPackageJson(pjsonData) {
   const dependencies = Object.assign({}, pjsonData.devDependencies, pjsonData.dependencies);
   return minMatchingVersion(dependencies.electron);
@@ -50,28 +75,33 @@ export function findElectronVersionsFromYarnLock(yarnLockData) {
  *
  * @returns {string} The oldest version found.
  */
-export async function findOldestElectronVersion(places) {
-  let versions = [];
+export async function findOldestElectronVersionWithSource(places) {
+  let candidates = [];
 
   if (places.pjsonData) {
     const pjsonVersion = findElectronVersionFromPackageJson(places.pjsonData);
-    if (pjsonVersion) versions.push(pjsonVersion);
+    if (pjsonVersion) candidates.push({ version: pjsonVersion, source: 'package_json' });
   }
 
   if (places.rootPath) {
     const installedVersions = await findElectronVersionsFromInstalledPackages(places.rootPath);
-    if (installedVersions) versions.push(...installedVersions);
+    if (installedVersions) candidates.push(...installedVersions.map(version => ({ version, source: 'installed_package' })));
   }
 
   if (places.plockData) {
     const plockVersions = findElectronVersionsFromPackageLock(places.plockData);
-    if (plockVersions) versions.push(...plockVersions);
+    if (plockVersions) candidates.push(...plockVersions.map(version => ({ version, source: 'lockfile' })));
   }
 
   if (places.yarnLockData) {
     const yarnLockVersions = findElectronVersionsFromYarnLock(places.yarnLockData);
-    if (yarnLockVersions) versions.push(...yarnLockVersions);
+    if (yarnLockVersions) candidates.push(...yarnLockVersions.map(version => ({ version, source: 'lockfile' })));
   }
 
-  return oldestVersion(versions);
+  return oldestVersionWithSource(candidates);
+}
+
+export async function findOldestElectronVersion(places) {
+  const result = await findOldestElectronVersionWithSource(places);
+  return result ? result.version : undefined;
 }

@@ -4,7 +4,7 @@ import asar from '@electron/asar';
 
 import { extension } from '../util';
 import { Loader } from './loader_interface';
-import { findOldestElectronVersion } from "../util/electron_version";
+import { findOldestElectronVersionWithSource } from "../util/electron_version";
 
 export class LoaderAsar extends Loader {
   constructor() {
@@ -54,12 +54,18 @@ export class LoaderAsar extends Loader {
       }
     };
 
-    const electronVersion = await findOldestElectronVersion({
-      pjsonData: readAndOptionallyParse('package.json', true),
-      plockData: readAndOptionallyParse('package-lock.json', true),
-      yarnLockData: readAndOptionallyParse('yarn.lock', false),
+    const pjsonData = readAndOptionallyParse('package.json', true);
+    const plockData = readAndOptionallyParse('package-lock.json', true);
+    const yarnLockData = readAndOptionallyParse('yarn.lock', false);
+    const electronVersion = await findOldestElectronVersionWithSource({
+      pjsonData,
+      plockData,
+      yarnLockData,
     });
-    if (electronVersion) this._electronVersion = electronVersion;
+    if (electronVersion) {
+      this._electronVersion = electronVersion.version;
+      this._electronVersionSource = electronVersion.source;
+    }
 
     logger.debug(`Discovered ${this.list_files.size} files`);
   }

@@ -27,10 +27,12 @@ async function main() {
       .option(__('upgradeOption'), __('upgradeOptionDescription'))
       .option(__('electronVersionOption'), __('electronVersionOptionDescription'))
       .option(__('parserPluginsOption'), __('parserPluginsOptionDescription'))
+      .option('--output-dir <directory>', 'write structured schema v1 output files to a directory')
+      .option('--target-id <id>', 'stable target identifier to write into structured schema v1 outputs')
       .option('--parse-errors-output <file|dir>', 'write parser errors to a JSONL file, or to parse_errors.jsonl in the specified directory')
       .parse(process.argv);
 
-  const forCli = !program.output;
+  const forCli = !program.output && !program.outputDir;
 
   if (forCli) {
     console.log(`
@@ -90,6 +92,8 @@ async function main() {
   run({
     input,
     output: program.output,
+    outputDir: program.outputDir,
+    targetId: program.targetId,
     isSarif: program.fileFormat === 'sarif',
     customScan: program.checks,
     excludeFromScan: program.excludeChecks,

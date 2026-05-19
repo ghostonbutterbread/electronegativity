@@ -10,6 +10,7 @@ import { LoaderFile, LoaderAsar, LoaderDirectory } from './loader';
 import { Parser, parseErrorRecord } from './parser';
 import { Finder } from './finder';
 import { GlobalChecks, severity, confidence } from './finder';
+import { buildFindings, buildHypotheses, buildInventory, buildRunMetadata, buildSarifDocument, contextPacketFilename, writeOutputDirectory } from './output';
 import { extension, input_exists, is_directory, writeIssues, getRelativePath } from './util';
 
 const PARSE_ERRORS_FILENAME = 'parse_errors.jsonl';
@@ -71,6 +72,7 @@ export default async function run(options, forCli = false) {
 
   // Load
   let loader;
+  const generatedAt = new Date().toISOString();
 
   if(is_directory(options.input)){
     loader = new LoaderDirectory();
@@ -80,6 +82,7 @@ export default async function run(options, forCli = false) {
 
   await loader.load(options.input);
   const electronVersion = options.electronVersionOverride || loader.electronVersion;
+  options.electronVersionSource = options.electronVersionOverride ? 'cli' : loader.electronVersionSource;
   if (!electronVersion)
     logger.warn(__('electronVersionError'));
 
@@ -214,6 +217,12 @@ export default async function run(options, forCli = false) {
       issues[i].file = getRelativePath(options.input, issue.file);
     });
 
+  const runMetadata = buildRunMetadata(options, electronVersion, generatedAt);
+  const findings = buildFindings(options.input, issues, electronVersion);
+  const inventory = buildInventory(options.input, fileClassifications);
+  const hypotheses = buildHypotheses();
+  const sarif = buildSarifDocument(options.isRelative ? options.input : null, findings);
+
   let rows = [];
   if (forCli) {
     for (const issue of issues) {
@@ -237,6 +246,9 @@ export default async function run(options, forCli = false) {
 
   writeParseErrors(options.parseErrorsOutput || defaultParseErrorsOutputPath(options.output), parseErrors);
 
+  if (options.outputDir)
+    writeOutputDirectory(options.outputDir, runMetadata, findings, inventory, hypotheses, parseErrors, sarif);
+
   if (forCli) {
     if (rows.length > 0) {
       table.push(...rows);
@@ -250,6 +262,14 @@ export default async function run(options, forCli = false) {
     errors,
     parseErrors,
     fileClassifications,
-    issues
+    issues,
+    schemaV1: {
+      run: runMetadata,
+      findings,
+      inventory,
+      hypotheses,
+      sarif,
+      contextPacketFilename: contextPacketFilename()
+    }
   };
 }
