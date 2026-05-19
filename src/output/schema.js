@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
+import { normalizeFuseContext, normalizeVersionContext } from '../util/electron_context';
 import { getRelativePath, is_directory } from '../util';
 
 const VER = require('../../package.json').version;
@@ -106,10 +107,41 @@ function confidenceReasons(issue) {
   return reasons;
 }
 
+function issueType(issue) {
+  return issue && issue.properties && issue.properties.issueType ? issue.properties.issueType : 'finding';
+}
+
+function issueClassification(issue) {
+  return issue && issue.properties && issue.properties.issueClassification ? issue.properties.issueClassification : 'finding';
+}
+
+function fingerprintProperties(issue) {
+  const properties = issue && issue.properties ? Object.assign({}, issue.properties) : null;
+
+  if (!properties)
+    return null;
+
+  delete properties.issueType;
+  delete properties.issueClassification;
+
+  if (properties.versionContext && typeof properties.versionContext === 'object' && !Array.isArray(properties.versionContext)) {
+    const versionContext = Object.assign({}, properties.versionContext);
+    delete versionContext.electronVersionSource;
+    delete versionContext.electronVersionConfidence;
+
+    if (Object.keys(versionContext).length > 0)
+      properties.versionContext = versionContext;
+    else
+      delete properties.versionContext;
+  }
+
+  return properties;
+}
+
 function findingEvidence(issue) {
   return {
     sample: issue && issue.sample ? issue.sample : null,
-    properties: issue && issue.properties ? issue.properties : null
+    properties: fingerprintProperties(issue)
   };
 }
 
@@ -144,20 +176,17 @@ function targetId(options) {
   return stableHash(normalizeSlashes(path.resolve(options.input)));
 }
 
-function versionSource(options, electronVersion) {
-  if (options.electronVersionOverride)
-    return 'cli';
+function findingVersionContext(issue, versionContext, fuseContext) {
+  const issueVersionContext = issue && issue.properties && issue.properties.versionContext ? issue.properties.versionContext : {};
 
-  return electronVersion ? (options.electronVersionSource || 'unknown') : 'unknown';
-}
-
-function versionConfidence(options, electronVersion) {
-  if (options.electronVersionOverride)
-    return 'high';
-  if (options.electronVersionSource === 'package_json' || options.electronVersionSource === 'lockfile')
-    return 'medium';
-
-  return electronVersion ? 'low' : 'low';
+  return {
+    electron_version: versionContext.electronVersion || null,
+    electron_version_source: versionContext.source,
+    electron_version_confidence: versionContext.confidence,
+    default_behavior: issueVersionContext.defaultBehavior || null,
+    fuse_state: fuseContext.state,
+    fuse_source: fuseContext.source
+  };
 }
 
 function sortFindings(findings) {
@@ -192,28 +221,36 @@ function sortInventory(records) {
   });
 }
 
-export function buildRunMetadata(options, electronVersion, generatedAt) {
+export function buildRunMetadata(options, electronVersion, generatedAt, fuseContextValue = null) {
+  const versionContext = normalizeVersionContext(electronVersion, options);
+  const fuseContext = normalizeFuseContext(fuseContextValue);
+
   return {
     schema_version: SCHEMA_VERSION,
     scanner_version: VER,
     target_id: targetId(options),
     input_kind: inputKind(options.input),
-    electron_version: electronVersion || null,
-    electron_version_source: versionSource(options, electronVersion),
-    electron_version_confidence: versionConfidence(options, electronVersion),
+    electron_version: versionContext.electronVersion || null,
+    electron_version_source: versionContext.source,
+    electron_version_confidence: versionContext.confidence,
+    fuse_state: fuseContext.state,
+    fuse_source: fuseContext.source,
+    fuses: fuseContext.fuses,
     generated_at: generatedAt
   };
 }
 
-export function buildFindings(input, issues, electronVersion) {
+export function buildFindings(input, issues, electronVersion, fuseContextValue = null) {
+  const versionContext = normalizeVersionContext(electronVersion);
+  const fuseContext = normalizeFuseContext(fuseContextValue);
   const findings = issues.map(issue => {
     const file = normalizeFileForDisplay(input, issue.file);
     const sarifFile = issue.file && issue.file !== 'N/A' ? issue.file : 'N/A';
     const resultId = findingId(input, issue);
 
     return {
-      type: 'finding',
-      classification: 'finding',
+      type: issueType(issue),
+      classification: issueClassification(issue),
       check_id: issue.id,
       result_id: resultId,
       title: issue.description,
@@ -228,10 +265,7 @@ export function buildFindings(input, issues, electronVersion) {
       electron_component: null,
       affected_window_or_channel: null,
       trust_boundary: null,
-      version_context: {
-        electron_version: electronVersion || null,
-        default_behavior: null
-      },
+      version_context: findingVersionContext(issue, versionContext, fuseContext),
       validation_state: 'static_only',
       manual_review: Boolean(issue.manualReview),
       file_classification: issueFileClassification(issue),
@@ -327,6 +361,7 @@ export function buildSarifDocument(root, findings) {
         resultId: finding.result_id
       },
       properties: {
+        type: finding.type,
         result_id: finding.result_id,
         classification: finding.classification,
         confidence: finding.confidence,
@@ -391,6 +426,7 @@ export function buildSummaryMarkdown(runMetadata, findings, inventory, hypothese
     `- Target ID: ${runMetadata.target_id}`,
     `- Input kind: ${runMetadata.input_kind}`,
     `- Electron version: ${runMetadata.electron_version || 'unknown'}`,
+    `- Fuse state: ${runMetadata.fuse_state}`,
     `- Findings: ${findings.length}`,
     `- Inventory records: ${inventory.records.length}`,
     `- Hypotheses: ${hypotheses.length}`,
@@ -407,6 +443,7 @@ export function buildElectronTeamContextPacket(runMetadata, findings, inventory,
       target_id: runMetadata.target_id,
       input_kind: runMetadata.input_kind,
       electron_version: runMetadata.electron_version,
+      fuse_state: runMetadata.fuse_state,
       validation_state: 'static_only'
     },
     artifact_files: {

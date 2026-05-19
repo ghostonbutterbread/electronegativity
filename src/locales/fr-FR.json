@@ -34,7 +34,7 @@
 	"noFindingsFound": "Aucune anomalie détectée.",
 	"fileFormatError": "Veuillez spécifier l'extension de format de fichier.",
 	"errorWhileScanning": "Erreur lors du scan.",
-	"electronVersionError": "Impossible de détecter la version d'Electron, en supposant v0.1.0. Les valeurs par défaut ont probablement changé pour votre version actuelle, veuillez vérifier manuellement.",
+	"electronVersionError": "Impossible de détecter la version d'Electron. Les valeurs par défaut peuvent différer pour votre version réelle, veuillez vérifier manuellement.",
 	"severityLevelError": "Ce niveau de gravité n'existe pas!",
 	"confidenceLevelError": "Ce niveau de confiance n'existe pas!",
 	"tableCheckId": "ID de vérification",

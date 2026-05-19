@@ -25,6 +25,33 @@ logger.add(logger.transports.Console, {colorize : true, level : 'silly'});
 
 let check_tests = "test/checks/AtomicChecks";
 
+async function findSnippet(source, checkId, electronVersion = null) {
+  const filename = path.join(check_tests, `phase3_${checkId.toLowerCase()}.js`);
+  const parser = new Parser(false, true);
+  const [type, data, content] = parser.parse(filename, Buffer.from(source));
+  const finder = new Finder(null, null, null);
+  const classification = parser.getFileClassification(filename);
+  return finder.find(filename, data, type, content, [checkId], electronVersion, classification);
+}
+
+async function findMarkup(source, checkId, electronVersion = null) {
+  const filename = path.join(check_tests, `phase3_${checkId.toLowerCase()}.html`);
+  const parser = new Parser(false, true);
+  const [type, data, content] = parser.parse(filename, Buffer.from(source));
+  const finder = new Finder(null, null, null);
+  const classification = parser.getFileClassification(filename);
+  return finder.find(filename, data, type, content, [checkId], electronVersion, classification);
+}
+
+async function findJson(source, checkId, electronVersion = null) {
+  const filename = path.join(check_tests, `phase3_${checkId.toLowerCase()}.json`);
+  const parser = new Parser(false, true);
+  const [type, data, content] = parser.parse(filename, Buffer.from(source));
+  const finder = new Finder(null, null, null);
+  const classification = parser.getFileClassification(filename);
+  return finder.find(filename, data, type, content, [checkId], electronVersion, classification);
+}
+
 describe('Finder file classification', () => {
   it('attaches classification to emitted issues', async () => {
     const file = path.join(check_tests, 'NODE_INTEGRATION_JS_CHECK_13_1.js');
@@ -44,6 +71,97 @@ describe('Finder file classification', () => {
 
     result.length.should.be.above(0);
     result[0].fileClassification.should.equal(classification);
+  });
+
+  it('keeps HTML checks working after the finder match signature expansion', async () => {
+    const issues = await findMarkup('<webview src=\"https://example.com\" nodeintegration></webview>', 'NODE_INTEGRATION_HTML_CHECK');
+
+    issues.length.should.equal(1);
+    issues[0].fileClassification.parser_status.should.equal('ok');
+  });
+
+  it('keeps JSON checks working after the finder match signature expansion', async () => {
+    const issues = await findJson('{\"dependencies\":{\"electron\":\"^20.0.0\"}}', 'ELECTRON_VERSION_JSON_CHECK');
+
+    issues.length.should.equal(1);
+    issues[0].fileClassification.parser_status.should.equal('ok');
+  });
+});
+
+describe('Finder version-aware defaults', () => {
+  it('treats missing nodeIntegration as insecure before Electron 5 and hardening afterwards', async () => {
+    const source = 'new BrowserWindow({ webPreferences: {} });';
+    const oldIssues = await findSnippet(source, 'NODE_INTEGRATION_JS_CHECK', '4.0.0');
+    const modernIssues = await findSnippet(source, 'NODE_INTEGRATION_JS_CHECK', '5.0.0');
+
+    oldIssues.length.should.equal(1);
+    oldIssues[0].severity.name.should.equal('HIGH');
+    oldIssues[0].manualReview.should.equal(false);
+    oldIssues[0].properties.issueType.should.equal('finding');
+    oldIssues[0].properties.issueClassification.should.equal('finding');
+    oldIssues[0].properties.versionContext.defaultBehavior.should.equal('node_integration_default_true');
+
+    modernIssues.length.should.equal(1);
+    modernIssues[0].severity.name.should.equal('INFORMATIONAL');
+    modernIssues[0].manualReview.should.equal(false);
+    modernIssues[0].properties.issueType.should.equal('finding');
+    modernIssues[0].properties.issueClassification.should.equal('hardening');
+    modernIssues[0].properties.versionContext.defaultBehavior.should.equal('node_integration_default_false');
+  });
+
+  it('treats missing contextIsolation as insecure before Electron 12 and hardening afterwards', async () => {
+    const source = 'new BrowserWindow({ webPreferences: {} });';
+    const oldIssues = await findSnippet(source, 'CONTEXT_ISOLATION_JS_CHECK', '11.0.0');
+    const modernIssues = await findSnippet(source, 'CONTEXT_ISOLATION_JS_CHECK', '12.0.0');
+
+    oldIssues.length.should.equal(1);
+    oldIssues[0].severity.name.should.equal('HIGH');
+    oldIssues[0].manualReview.should.equal(false);
+    oldIssues[0].properties.versionContext.defaultBehavior.should.equal('context_isolation_default_false');
+
+    modernIssues.length.should.equal(1);
+    modernIssues[0].severity.name.should.equal('INFORMATIONAL');
+    modernIssues[0].manualReview.should.equal(false);
+    modernIssues[0].properties.issueClassification.should.equal('hardening');
+    modernIssues[0].properties.versionContext.defaultBehavior.should.equal('context_isolation_default_true');
+  });
+
+  it('treats missing sandbox as insecure before Electron 20 and hardening afterwards', async () => {
+    const source = 'new BrowserWindow({ webPreferences: {} });';
+    const oldIssues = await findSnippet(source, 'SANDBOX_JS_CHECK', '19.0.0');
+    const modernIssues = await findSnippet(source, 'SANDBOX_JS_CHECK', '20.0.0');
+
+    oldIssues.length.should.equal(1);
+    oldIssues[0].severity.name.should.equal('MEDIUM');
+    oldIssues[0].manualReview.should.equal(false);
+    oldIssues[0].properties.versionContext.defaultBehavior.should.equal('sandbox_default_false');
+
+    modernIssues.length.should.equal(1);
+    modernIssues[0].severity.name.should.equal('INFORMATIONAL');
+    modernIssues[0].manualReview.should.equal(false);
+    modernIssues[0].properties.issueClassification.should.equal('hardening');
+    modernIssues[0].properties.versionContext.defaultBehavior.should.equal('sandbox_default_true');
+  });
+
+  it('keeps explicit insecure settings classified as findings when the default is secure', async () => {
+    const source = 'new BrowserWindow({ webPreferences: { contextIsolation: false } });';
+    const issues = await findSnippet(source, 'CONTEXT_ISOLATION_JS_CHECK', '12.0.0');
+
+    issues.length.should.equal(1);
+    issues[0].severity.name.should.equal('HIGH');
+    issues[0].properties.issueType.should.equal('finding');
+    issues[0].properties.issueClassification.should.equal('finding');
+  });
+
+  it('represents unknown defaults explicitly instead of pretending a precise Electron version', async () => {
+    const source = 'new BrowserWindow({ webPreferences: {} });';
+    const issues = await findSnippet(source, 'CONTEXT_ISOLATION_JS_CHECK', null);
+
+    issues.length.should.equal(1);
+    issues[0].severity.name.should.equal('LOW');
+    issues[0].manualReview.should.equal(true);
+    should.equal(issues[0].properties.versionContext.electronVersion, null);
+    issues[0].properties.versionContext.defaultBehavior.should.equal('context_isolation_default_unknown');
   });
 });
 

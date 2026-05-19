@@ -1,5 +1,6 @@
 import { sourceTypes } from '../../../parser/types';
 import { severity, confidence } from '../../attributes';
+import { buildCheckProperties, defaultBehaviorForSetting, issueClassificationForDefaultBehavior } from '../../../util/electron_context';
 
 export default class NodeIntegrationJSCheck {
   constructor() {
@@ -13,7 +14,7 @@ export default class NodeIntegrationJSCheck {
   //nodeIntegrationInWorker Boolean (optional) - Whether node integration is enabled in web workers. Default is false
   //nodeIntegrationInSubFrames Boolean (optional) - Whether node integration is enabled in in sub-frames such as iframes. Default is false
 
-  match(astNode, astHelper, scope, defaults){
+  match(astNode, astHelper, scope, defaults, electronVersion, versionContext){
     if (astNode.type !== 'NewExpression') return null;
     if (astNode.callee.name !== 'BrowserWindow' && astNode.callee.name !== 'BrowserView') return null;
 
@@ -25,26 +26,43 @@ export default class NodeIntegrationJSCheck {
 
       let loc = [];
 
-      nodeIntegrationFound = this.findNode(astHelper, target, 'nodeIntegration', value => value === false, loc);
+      nodeIntegrationFound = this.findNode(astHelper, target, 'nodeIntegration', value => value === false, loc, versionContext);
       // nodeIntegrationInWorker default value is safe, as well as nodeIntegrationInSubFrames
       // so no check for return value (don't care if it was found)
-      this.findNode(astHelper, target, 'nodeIntegrationInWorker', value => value !== true, loc);
-      this.findNode(astHelper, target, 'nodeIntegrationInSubFrames', value => value !== true, loc);
+      this.findNode(astHelper, target, 'nodeIntegrationInWorker', value => value !== true, loc, versionContext);
+      this.findNode(astHelper, target, 'nodeIntegrationInSubFrames', value => value !== true, loc, versionContext);
 
       let sandboxLoc = [];
-      let sandboxFound = this.findNode(astHelper, target, 'sandbox', value => value !== true, sandboxLoc);
+      let sandboxFound = this.findNode(astHelper, target, 'sandbox', value => value !== true, sandboxLoc, versionContext);
       if (!sandboxFound || sandboxLoc.length <= 0) // sandbox disables node integration
         locations = locations.concat(loc);
     }
 
-    if (!nodeIntegrationFound && defaults.nodeIntegration) {
-      locations.push({ line: astNode.loc.start.line, column: astNode.loc.start.column, id: this.id, description: this.description, shortenedURL: this.shortenedURL, severity: severity.HIGH, confidence: confidence.FIRM, manualReview: false });
+    if (!nodeIntegrationFound) {
+      locations.push(this.missingSettingIssue(astNode, versionContext));
     }
 
     return locations;
   }
 
-  findNode(astHelper, startNode, name, skipCondition, locations) {
+  missingSettingIssue(astNode, versionContext) {
+    const defaultBehavior = defaultBehaviorForSetting('nodeIntegration', versionContext);
+    const issueClassification = issueClassificationForDefaultBehavior('nodeIntegration', defaultBehavior);
+
+    return {
+      line: astNode.loc.start.line,
+      column: astNode.loc.start.column,
+      id: this.id,
+      description: this.description,
+      shortenedURL: this.shortenedURL,
+      severity: defaultBehavior.known ? (defaultBehavior.value ? severity.HIGH : severity.INFORMATIONAL) : severity.LOW,
+      confidence: defaultBehavior.known ? confidence.FIRM : confidence.TENTATIVE,
+      manualReview: !defaultBehavior.known,
+      properties: buildCheckProperties('nodeIntegration', versionContext, { issueClassification })
+    };
+  }
+
+  findNode(astHelper, startNode, name, skipCondition, locations, versionContext) {
     let found = false;
     var nodeIntegrationStrings = ["nodeIntegration","nodeIntegrationInWorker","nodeIntegrationInSubFrames"];
     const nodes = astHelper.findNodeByType(startNode, astHelper.PropertyName, astHelper.PropertyDepth, false, node => {
@@ -87,6 +105,7 @@ export default class NodeIntegrationJSCheck {
         severity: severity.INFORMATIONAL,
         confidence: confidence.FIRM,
         manualReview: needsManualReview,
+        properties: buildCheckProperties('nodeIntegration', versionContext)
       });
     }
 

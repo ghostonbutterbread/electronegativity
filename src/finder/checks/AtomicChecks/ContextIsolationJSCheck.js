@@ -1,5 +1,6 @@
 import { sourceTypes } from '../../../parser/types';
 import { severity, confidence } from '../../attributes';
+import { buildCheckProperties, defaultBehaviorForSetting, issueClassificationForDefaultBehavior } from '../../../util/electron_context';
 
 export default class ContextIsolationJSCheck {
   constructor() {
@@ -9,7 +10,7 @@ export default class ContextIsolationJSCheck {
     this.shortenedURL = "https://git.io/Jeu1p";
   }
 
-  match(astNode, astHelper, scope){
+  match(astNode, astHelper, scope, defaults, electronVersion, versionContext){
     if (astNode.type !== 'NewExpression') return null;
     if (astNode.callee.name !== 'BrowserWindow' && astNode.callee.name !== 'BrowserView') return null;
 
@@ -39,23 +40,54 @@ export default class ContextIsolationJSCheck {
             var target = scope.getVarInScope(node.value.name);
             if ((!target || target.defs.length == 0 || !target.defs[0].node.init || !target.defs[0].node.init.value) || // e.g. var variable; declared but not assigned or assigned later in an undefined way
                 (target && target.defs[0].node.init && target.defs[0].node.init.value !== true)) // e.g. var variable = true; declared and assigned on creation, the only case we can afford to detect atm
-               location.push({ line: node.key.loc.start.line, column: node.key.loc.start.column, id: this.id, description: this.description, shortenedURL: this.shortenedURL, severity: severity.HIGH, confidence: confidence.FIRM, manualReview: false });
+               location.push(this.explicitIssue(node.key.loc.start.line, node.key.loc.start.column, versionContext));
           } else if(node.value.value !== true) {
           // in practice if there are two keys with the same name, the value of the last one wins
           // but technically it is an invalid json
           // just to be on the safe side show a warning if any value is insecure
-            location.push({ line: node.key.loc.start.line, column: node.key.loc.start.column, id: this.id, description: this.description, shortenedURL: this.shortenedURL, severity: severity.HIGH, confidence: confidence.FIRM, manualReview: false });
+            location.push(this.explicitIssue(node.key.loc.start.line, node.key.loc.start.column, versionContext));
           }
         }
       } else {
-        location.push({ line: astNode.loc.start.line, column: astNode.loc.start.column, id: this.id, description: this.description, shortenedURL: this.shortenedURL, severity: severity.HIGH, confidence: confidence.FIRM, manualReview: false });
+        location.push(this.missingSettingIssue(astNode.loc.start.line, astNode.loc.start.column, versionContext));
       }
       
     } else {
       //No webpreferences
-      location.push({ line: astNode.loc.start.line, column: astNode.loc.start.column, id: this.id, description: this.description, shortenedURL: this.shortenedURL, severity: severity.HIGH, confidence: confidence.FIRM, manualReview: false });
+      location.push(this.missingSettingIssue(astNode.loc.start.line, astNode.loc.start.column, versionContext));
     }
 
     return location;
+  }
+
+  explicitIssue(line, column, versionContext) {
+    return {
+      line,
+      column,
+      id: this.id,
+      description: this.description,
+      shortenedURL: this.shortenedURL,
+      severity: severity.HIGH,
+      confidence: confidence.FIRM,
+      manualReview: false,
+      properties: buildCheckProperties('contextIsolation', versionContext)
+    };
+  }
+
+  missingSettingIssue(line, column, versionContext) {
+    const defaultBehavior = defaultBehaviorForSetting('contextIsolation', versionContext);
+    const issueClassification = issueClassificationForDefaultBehavior('contextIsolation', defaultBehavior);
+
+    return {
+      line,
+      column,
+      id: this.id,
+      description: this.description,
+      shortenedURL: this.shortenedURL,
+      severity: defaultBehavior.known ? (defaultBehavior.value ? severity.INFORMATIONAL : severity.HIGH) : severity.LOW,
+      confidence: defaultBehavior.known ? confidence.FIRM : confidence.TENTATIVE,
+      manualReview: !defaultBehavior.known,
+      properties: buildCheckProperties('contextIsolation', versionContext, { issueClassification })
+    };
   }
 }

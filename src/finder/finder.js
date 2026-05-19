@@ -3,6 +3,7 @@ import { sourceTypes } from '../parser/types';
 import { ELECTRON_ATOMIC_UPGRADE_CHECKS } from './checks/AtomicChecks/ElectronAtomicUpgradeChecks';
 import { isDisabledByInlineComment } from "../util/exceptions";
 import { getSample } from "../util/file"
+import { normalizeVersionContext } from '../util/electron_context';
 import chalk from 'chalk';
 import { gte, compare } from 'semver';
 
@@ -71,13 +72,11 @@ export class Finder {
   }
 
   async find(file, data, type, content, use_only_checks = null, electronVersion = null, fileClassification = null) {
-    // If the loader didn't detect the Electron version, assume the first one. Not knowing the version, we have to assume the worst (i.e.
-    // all options defaulting to insecure values). By always setting the version here, the code in the checkers is simplified as they now
-    // don't have to handle the case of unknown versions.
-    if (!electronVersion) electronVersion = '0.1.0';
+    const versionContext = normalizeVersionContext(electronVersion);
+    const legacyElectronVersion = versionContext.known ? versionContext.electronVersion : '0.1.0';
 
     const all_defaults = require('../../defaults.json');
-    const version_of_last_default_change = Object.keys(all_defaults).sort((a, b) => compare(a, b)).reverse().find(current_version => gte(electronVersion, current_version));
+    const version_of_last_default_change = Object.keys(all_defaults).sort((a, b) => compare(a, b)).reverse().find(current_version => gte(legacyElectronVersion, current_version));
     const defaults = all_defaults[version_of_last_default_change];
 
     const checks = this._checks_by_type.get(type).filter((check) => {
@@ -98,7 +97,7 @@ export class Finder {
           enter: (node) => {
             rootData.Scope.updateFunctionScope(rootData.astParser.getNode(node), "enter");
             for (const check of checks) {
-              const matches = check.match(rootData.astParser.getNode(node), rootData.astParser, rootData.Scope, defaults, electronVersion, fileClassification);
+              const matches = check.match(rootData.astParser.getNode(node), rootData.astParser, rootData.Scope, defaults, legacyElectronVersion, versionContext, fileClassification);
               if (matches) {
                 for(const m of matches) {
                   const firstLineSample = getSample(fileLines, 0);
@@ -118,7 +117,7 @@ export class Finder {
         break;
       case sourceTypes.HTML:
         for (const check of checks) {
-          const matches = check.match(data, content, defaults, electronVersion, fileClassification);
+          const matches = check.match(data, content, defaults, legacyElectronVersion, versionContext, fileClassification);
           if(matches){
             for(const m of matches) {
               const firstLineSample = getSample(fileLines, 0);
@@ -132,7 +131,7 @@ export class Finder {
         break;
       case sourceTypes.JSON:
         for (const check of checks) {
-          const matches = await check.match(data, defaults, electronVersion, fileClassification);
+          const matches = await check.match(data, defaults, legacyElectronVersion, versionContext, fileClassification);
           if (matches) {
             for(const m of matches) {
               const sample = getSample(fileLines, m.line - 1);

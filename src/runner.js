@@ -11,6 +11,7 @@ import { Parser, parseErrorRecord } from './parser';
 import { Finder } from './finder';
 import { GlobalChecks, severity, confidence } from './finder';
 import { buildFindings, buildHypotheses, buildInventory, buildRunMetadata, buildSarifDocument, contextPacketFilename, writeOutputDirectory } from './output';
+import { createFuseContext, createVersionContext } from './util/electron_context';
 import { extension, input_exists, is_directory, writeIssues, getRelativePath } from './util';
 
 const PARSE_ERRORS_FILENAME = 'parse_errors.jsonl';
@@ -83,7 +84,13 @@ export default async function run(options, forCli = false) {
   await loader.load(options.input);
   const electronVersion = options.electronVersionOverride || loader.electronVersion;
   options.electronVersionSource = options.electronVersionOverride ? 'cli' : loader.electronVersionSource;
-  if (!electronVersion)
+  const versionContext = createVersionContext({
+    electronVersion,
+    electronVersionSource: options.electronVersionSource,
+    electronVersionOverride: options.electronVersionOverride
+  });
+  const fuseContext = createFuseContext(options.fuseContext);
+  if (!versionContext.known)
     logger.warn(__('electronVersionError'));
 
   if (options.severitySet) {
@@ -176,7 +183,7 @@ export default async function run(options, forCli = false) {
         }
 
         fileClassifications[file] = parser.getFileClassification(file);
-        const result = await finder.find(file, data, type, content, null, electronVersion, fileClassifications[file]);
+        const result = await finder.find(file, data, type, content, null, versionContext, fileClassifications[file]);
         issues.push(...result);
       } catch (error) {
         const classification = parser.getFileClassification(file);
@@ -217,8 +224,8 @@ export default async function run(options, forCli = false) {
       issues[i].file = getRelativePath(options.input, issue.file);
     });
 
-  const runMetadata = buildRunMetadata(options, electronVersion, generatedAt);
-  const findings = buildFindings(options.input, issues, electronVersion);
+  const runMetadata = buildRunMetadata(options, versionContext, generatedAt, fuseContext);
+  const findings = buildFindings(options.input, issues, versionContext, fuseContext);
   const inventory = buildInventory(options.input, fileClassifications);
   const hypotheses = buildHypotheses();
   const sarif = buildSarifDocument(options.isRelative ? options.input : null, findings);

@@ -34,7 +34,7 @@
 	"noFindingsFound": "No se encontraron hallazgos.",
 	"fileFormatError": "Especifique la extensión del formato de archivo.",
 	"errorWhileScanning": "Error al escanear.",
-	"electronVersionError": "No se pudo detectar la versión de Electron, se asume v0.1.0. Los valores predeterminados probablemente han cambiado para su versión actual, consulte manualmente.",
+	"electronVersionError": "No se pudo detectar la versión de Electron. Los valores predeterminados pueden diferir para su versión real; revíselo manualmente.",
 	"severityLevelError": "¡Este nivel de gravedad no existe!",
 	"confidenceLevelError": "¡Este nivel de confianza no existe!",
 	"tableCheckId": "ID de verificación",

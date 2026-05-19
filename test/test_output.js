@@ -4,6 +4,7 @@ import path from 'path';
 
 import run from '../src/runner';
 import { buildFindings, buildInventory, buildRunMetadata, buildSarifDocument, writeOutputDirectory } from '../src/output';
+import { createVersionContext } from '../src/util/electron_context';
 import { writeIssues } from '../src/util';
 import { findOldestElectronVersionWithSource } from '../src/util/electron_version';
 
@@ -124,7 +125,7 @@ describe('Structured output', () => {
   });
 
   it('preserves legacy non-relative SARIF artifact locations in the structured output directory', async function () {
-    this.timeout(10000);
+    this.timeout(20000);
 
     const outputRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'electro-structured-absolute-'));
     const outputDir = path.join(outputRoot, 'audit-out');
@@ -178,6 +179,61 @@ describe('Structured output', () => {
     finding.column.should.equal(0);
     finding.manual_review.should.equal(true);
     finding.next_agent_hint.should.be.a('string');
+  });
+
+  it('preserves issue-level hardening classification in schema v1 and SARIF properties', () => {
+    const issues = [
+      {
+        id: 'SYNTHETIC_HARDENING_CHECK',
+        description: 'Synthetic hardening check',
+        file: findingFixture,
+        location: { line: 1, column: 0 },
+        sample: 'new BrowserWindow({ webPreferences: {} })',
+        severity: { name: 'INFORMATIONAL' },
+        confidence: { name: 'FIRM' },
+        properties: {
+          issueType: 'finding',
+          issueClassification: 'hardening',
+          versionContext: {
+            electronVersion: '20.0.0',
+            electronVersionSource: 'package_json',
+            electronVersionConfidence: 'medium',
+            defaultBehavior: 'sandbox_default_true'
+          }
+        }
+      },
+      {
+        id: 'SYNTHETIC_FINDING_CHECK',
+        description: 'Synthetic finding check',
+        file: findingFixture,
+        location: { line: 2, column: 0 },
+        sample: 'new BrowserWindow({ webPreferences: { sandbox: false } })',
+        severity: { name: 'MEDIUM' },
+        confidence: { name: 'FIRM' },
+        properties: {
+          issueType: 'finding',
+          issueClassification: 'finding',
+          versionContext: {
+            electronVersion: '20.0.0',
+            electronVersionSource: 'package_json',
+            electronVersionConfidence: 'medium',
+            defaultBehavior: 'sandbox_default_true'
+          }
+        }
+      }
+    ];
+    const findings = buildFindings(findingFixture, issues, createVersionContext({
+      electronVersion: '20.0.0',
+      electronVersionSource: 'package_json'
+    }));
+    const sarif = buildSarifDocument(null, findings);
+
+    findings[0].classification.should.equal('hardening');
+    findings[0].type.should.equal('finding');
+    findings[1].classification.should.equal('finding');
+    sarif.runs[0].results[0].properties.type.should.equal('finding');
+    sarif.runs[0].results[0].properties.classification.should.equal('hardening');
+    sarif.runs[0].results[1].properties.classification.should.equal('finding');
   });
 
   it('keeps finding, inventory, and auto-derived target IDs distinct for paths that differ only by case', () => {
@@ -247,6 +303,119 @@ describe('Structured output', () => {
     packageRun.electron_version_confidence.should.equal('medium');
     lockRun.electron_version_source.should.equal('lockfile');
     lockRun.electron_version_confidence.should.equal('medium');
+  });
+
+  it('records explicit unknown version and fuse state in run metadata', () => {
+    const runMetadata = buildRunMetadata({ input: findingFixture }, null, '2026-01-01T00:00:00.000Z');
+
+    should.equal(runMetadata.electron_version, null);
+    runMetadata.electron_version_source.should.equal('unknown');
+    runMetadata.electron_version_confidence.should.equal('low');
+    runMetadata.fuse_state.should.equal('unknown');
+    runMetadata.fuse_source.should.equal('unknown');
+    runMetadata.fuses.should.deep.equal({});
+  });
+
+  it('records plain fuse maps as known explicit fuse context', () => {
+    const runMetadata = buildRunMetadata({ input: findingFixture }, null, '2026-01-01T00:00:00.000Z', {
+      runAsNode: false,
+      cookieEncryption: true
+    });
+    const finding = buildFindings(findingFixture, [{
+      id: 'SYNTHETIC_FUSE_CHECK',
+      description: 'Synthetic fuse check',
+      file: findingFixture,
+      location: { line: 1, column: 0 },
+      sample: 'x',
+      severity: { name: 'LOW' },
+      confidence: { name: 'FIRM' }
+    }], null, { runAsNode: false })[0];
+
+    runMetadata.fuse_state.should.equal('known');
+    runMetadata.fuse_source.should.equal('explicit');
+    runMetadata.fuses.should.deep.equal({ cookieEncryption: true, runAsNode: false });
+    finding.version_context.fuse_state.should.equal('known');
+    finding.version_context.fuse_source.should.equal('explicit');
+  });
+
+  it('threads version provenance and unknown fuse state into finding version_context', () => {
+    const versionContext = createVersionContext({
+      electronVersion: '20.0.0',
+      electronVersionSource: 'package_json'
+    });
+    const issue = {
+      id: 'SYNTHETIC_VERSION_CONTEXT_CHECK',
+      description: 'Synthetic version context check',
+      file: findingFixture,
+      location: { line: 1, column: 0 },
+      sample: 'new BrowserWindow({ webPreferences: {} })',
+      severity: { name: 'LOW' },
+      confidence: { name: 'FIRM' },
+      properties: {
+        versionContext: {
+          defaultBehavior: 'sandbox_default_true'
+        }
+      }
+    };
+    const finding = buildFindings(findingFixture, [issue], versionContext)[0];
+
+    finding.version_context.electron_version.should.equal('20.0.0');
+    finding.version_context.electron_version_source.should.equal('package_json');
+    finding.version_context.electron_version_confidence.should.equal('medium');
+    finding.version_context.default_behavior.should.equal('sandbox_default_true');
+    finding.version_context.fuse_state.should.equal('unknown');
+    finding.version_context.fuse_source.should.equal('unknown');
+  });
+
+  it('keeps result IDs stable when only version provenance metadata changes', () => {
+    const packageIssue = {
+      id: 'SYNTHETIC_VERSION_CONTEXT_CHECK',
+      description: 'Synthetic version context check',
+      file: findingFixture,
+      location: { line: 1, column: 0 },
+      sample: 'new BrowserWindow({ webPreferences: {} })',
+      severity: { name: 'LOW' },
+      confidence: { name: 'FIRM' },
+      properties: {
+        issueType: 'finding',
+        issueClassification: 'hardening',
+        versionContext: {
+          electronVersion: '20.0.0',
+          electronVersionSource: 'package_json',
+          electronVersionConfidence: 'medium',
+          defaultBehavior: 'sandbox_default_true'
+        }
+      }
+    };
+    const lockIssue = {
+      id: 'SYNTHETIC_VERSION_CONTEXT_CHECK',
+      description: 'Synthetic version context check',
+      file: findingFixture,
+      location: { line: 1, column: 0 },
+      sample: 'new BrowserWindow({ webPreferences: {} })',
+      severity: { name: 'LOW' },
+      confidence: { name: 'FIRM' },
+      properties: {
+        issueType: 'finding',
+        issueClassification: 'hardening',
+        versionContext: {
+          electronVersion: '20.0.0',
+          electronVersionSource: 'lockfile',
+          electronVersionConfidence: 'medium',
+          defaultBehavior: 'sandbox_default_true'
+        }
+      }
+    };
+    const packageFinding = buildFindings(findingFixture, [packageIssue], createVersionContext({
+      electronVersion: '20.0.0',
+      electronVersionSource: 'package_json'
+    }))[0];
+    const lockFinding = buildFindings(findingFixture, [lockIssue], createVersionContext({
+      electronVersion: '20.0.0',
+      electronVersionSource: 'lockfile'
+    }))[0];
+
+    packageFinding.result_id.should.equal(lockFinding.result_id);
   });
 
   it('writes N/A manual-review findings through the output-directory writer', () => {

@@ -34,7 +34,7 @@
 	"noFindingsFound": "No findings found.",
 	"fileFormatError": "Please specify file format extension.",
 	"errorWhileScanning": "Error while scanning.",
-	"electronVersionError": "Couldn't detect Electron version, assuming v0.1.0. Defaults have probably changed for your actual version, please check manually.",
+	"electronVersionError": "Couldn't detect Electron version. Defaults may differ for your actual version, please check manually.",
 	"severityLevelError": "This severity level does not exist!",
 	"confidenceLevelError": "This confidence level does not exist!",
 	"tableCheckId": "Check ID",
