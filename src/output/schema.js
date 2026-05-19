@@ -17,14 +17,77 @@ function normalizeFileForDisplay(input, file) {
   if (!file || file === 'N/A')
     return 'N/A';
 
-  if (!path.isAbsolute(file))
-    return normalizeSlashes(file);
+  if (!path.isAbsolute(file)) {
+    const normalizedFile = normalizeSlashes(file);
+    const normalizedInput = input ? normalizeSlashes(input) : null;
+    if (normalizedInput && normalizedFile.startsWith(`${normalizedInput}/`))
+      return normalizeSlashes(path.relative(input, file));
+
+    return normalizedFile;
+  }
 
   return normalizeSlashes(getRelativePath(input, file));
 }
 
 function normalizeFileForId(input, file) {
   return normalizeFileForDisplay(input, file);
+}
+
+const INVENTORY_KEY_FILE_PARTS = {
+  source_file: [1],
+  renderer_container: [1],
+  web_preferences: [2],
+  preload_script: [2],
+  load_target: [2],
+  session: [1, 2],
+  navigation_handler: [2],
+  webview_attach_handler: [2],
+  global_sandbox: [1]
+};
+
+function normalizeInventoryKey(input, key) {
+  if (!key || typeof key !== 'string')
+    return key;
+
+  const parts = key.split('|');
+  if (parts.length < 2)
+    return key;
+
+  (INVENTORY_KEY_FILE_PARTS[parts[0]] || []).forEach(index => {
+    if (parts[index])
+      parts[index] = normalizeFileForId(input, parts[index]);
+  });
+
+  return parts.join('|');
+}
+
+function normalizeComponentRecord(input, record) {
+  const normalizedKey = normalizeInventoryKey(input, record.key);
+  const entityId = stableHash(normalizedKey);
+
+  return Object.assign({}, record, {
+    key: normalizedKey,
+    type: 'inventory',
+    classification: 'inventory',
+    inventory_id: entityId,
+    entity_id: entityId,
+    file: normalizeFileForDisplay(input, record.file)
+  });
+}
+
+function normalizeComponentRelationship(input, relationship) {
+  const normalizedRelationship = Object.assign({}, relationship, {
+    from_key: normalizeInventoryKey(input, relationship.from_key),
+    to_key: normalizeInventoryKey(input, relationship.to_key),
+    file: relationship.file ? normalizeFileForDisplay(input, relationship.file) : null,
+    line: relationship.line != null ? relationship.line : null,
+    column: relationship.column != null ? relationship.column : null
+  });
+
+  if (normalizedRelationship.relationship_type === 'global_sandbox_state')
+    normalizedRelationship.relationship_type = 'has_global_sandbox_evidence';
+
+  return normalizedRelationship;
 }
 
 function sortObject(value) {
@@ -221,6 +284,24 @@ function sortInventory(records) {
   });
 }
 
+function sortRelationships(relationships) {
+  return relationships.sort((a, b) => {
+    const typeCompare = a.relationship_type.localeCompare(b.relationship_type);
+    if (typeCompare !== 0)
+      return typeCompare;
+
+    const fromCompare = a.from_entity_id.localeCompare(b.from_entity_id);
+    if (fromCompare !== 0)
+      return fromCompare;
+
+    const toCompare = a.to_entity_id.localeCompare(b.to_entity_id);
+    if (toCompare !== 0)
+      return toCompare;
+
+    return a.relationship_id.localeCompare(b.relationship_id);
+  });
+}
+
 export function buildRunMetadata(options, electronVersion, generatedAt, fuseContextValue = null) {
   const versionContext = normalizeVersionContext(electronVersion, options);
   const fuseContext = normalizeFuseContext(fuseContextValue);
@@ -276,14 +357,16 @@ export function buildFindings(input, issues, electronVersion, fuseContextValue =
   return sortFindings(findings);
 }
 
-export function buildInventory(input, fileClassifications) {
+export function buildInventory(input, fileClassifications, componentInventory = null) {
   const files = Object.keys(fileClassifications || {});
-  const records = files.map(file => {
+  const sourceFileRecords = files.map(file => {
     const normalizedFile = normalizeFileForDisplay(input, file);
     const classification = fileClassifications[file] || {};
-    const entityId = stableHash(`source_file|${normalizeFileForId(input, file)}`);
+    const entityKey = `source_file|${normalizeFileForId(input, file)}`;
+    const entityId = stableHash(entityKey);
 
     return {
+      entity_key: entityKey,
       type: 'inventory',
       classification: 'inventory',
       inventory_id: entityId,
@@ -303,10 +386,74 @@ export function buildInventory(input, fileClassifications) {
     };
   });
 
+  const recordsByKey = new Map();
+  sourceFileRecords.forEach(record => {
+    recordsByKey.set(record.entity_key, record);
+  });
+
+  for (const record of (componentInventory && componentInventory.records) || []) {
+    if (!record || !record.key)
+      continue;
+
+    const normalizedRecord = normalizeComponentRecord(input, record);
+    if (recordsByKey.has(normalizedRecord.key))
+      continue;
+
+    const normalizedRecordKey = normalizedRecord.key;
+    delete normalizedRecord.key;
+    recordsByKey.set(normalizedRecordKey, normalizedRecord);
+  }
+
+  const entityIdsByKey = new Map();
+  Array.from(recordsByKey.entries()).forEach(([key, record]) => {
+    entityIdsByKey.set(key, record.entity_id);
+  });
+
+  const relationshipsByKey = new Map();
+  for (const relationship of (componentInventory && componentInventory.relationships) || []) {
+    if (!relationship || !relationship.from_key || !relationship.to_key)
+      continue;
+
+    const normalizedInputRelationship = normalizeComponentRelationship(input, relationship);
+    if (!entityIdsByKey.has(normalizedInputRelationship.from_key) || !entityIdsByKey.has(normalizedInputRelationship.to_key))
+      continue;
+
+    const relationshipFingerprint = {
+      relationship_type: normalizedInputRelationship.relationship_type,
+      from_key: normalizedInputRelationship.from_key,
+      to_key: normalizedInputRelationship.to_key,
+      file: normalizedInputRelationship.file,
+      line: normalizedInputRelationship.line,
+      column: normalizedInputRelationship.column
+    };
+    const relationshipId = stableHash(stableStringify(relationshipFingerprint));
+    if (relationshipsByKey.has(relationshipId))
+      continue;
+
+    const normalizedRelationship = Object.assign({}, normalizedInputRelationship, {
+      relationship_id: relationshipId,
+      from_entity_id: entityIdsByKey.get(normalizedInputRelationship.from_key),
+      to_entity_id: entityIdsByKey.get(normalizedInputRelationship.to_key)
+    });
+    delete normalizedRelationship.key;
+    delete normalizedRelationship.from_key;
+    delete normalizedRelationship.to_key;
+    relationshipsByKey.set(relationshipId, normalizedRelationship);
+  }
+
+  const records = Array.from(recordsByKey.values()).map(record => {
+    if (!record.entity_key)
+      return record;
+
+    const normalizedRecord = Object.assign({}, record);
+    delete normalizedRecord.entity_key;
+    return normalizedRecord;
+  });
+
   return {
     schema_version: SCHEMA_VERSION,
     records: sortInventory(records),
-    relationships: []
+    relationships: sortRelationships(Array.from(relationshipsByKey.values()))
   };
 }
 

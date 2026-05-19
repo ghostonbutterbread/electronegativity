@@ -10,6 +10,7 @@ import { LoaderFile, LoaderAsar, LoaderDirectory } from './loader';
 import { Parser, parseErrorRecord } from './parser';
 import { Finder } from './finder';
 import { GlobalChecks, severity, confidence } from './finder';
+import { RendererInventoryCollector } from './inventory/renderer_collector';
 import { buildFindings, buildHypotheses, buildInventory, buildRunMetadata, buildSarifDocument, contextPacketFilename, writeOutputDirectory } from './output';
 import { createFuseContext, createVersionContext } from './util/electron_context';
 import { extension, input_exists, is_directory, writeIssues, getRelativePath } from './util';
@@ -145,6 +146,7 @@ export default async function run(options, forCli = false) {
   let errors = [];
   let parseErrors = [];
   let fileClassifications = {};
+  const rendererInventoryCollector = new RendererInventoryCollector();
   let table = new Table({
     head: [__('tableCheckId'), __('tableAffectedFile'), __('tableLocation'), __('tableDescription')],
     colWidths:[undefined, undefined, undefined, 50], // necessary for wordWrap
@@ -184,6 +186,7 @@ export default async function run(options, forCli = false) {
 
         fileClassifications[file] = parser.getFileClassification(file);
         const result = await finder.find(file, data, type, content, null, versionContext, fileClassifications[file]);
+        rendererInventoryCollector.collect(file, type, data, content);
         issues.push(...result);
       } catch (error) {
         const classification = parser.getFileClassification(file);
@@ -226,7 +229,7 @@ export default async function run(options, forCli = false) {
 
   const runMetadata = buildRunMetadata(options, versionContext, generatedAt, fuseContext);
   const findings = buildFindings(options.input, issues, versionContext, fuseContext);
-  const inventory = buildInventory(options.input, fileClassifications);
+  const inventory = buildInventory(options.input, fileClassifications, rendererInventoryCollector.buildComponentInventory());
   const hypotheses = buildHypotheses();
   const sarif = buildSarifDocument(options.isRelative ? options.input : null, findings);
 

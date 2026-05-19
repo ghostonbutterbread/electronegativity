@@ -3,7 +3,9 @@ import os from 'os';
 import path from 'path';
 
 import run from '../src/runner';
+import { RendererInventoryCollector } from '../src/inventory/renderer_collector';
 import { buildFindings, buildInventory, buildRunMetadata, buildSarifDocument, writeOutputDirectory } from '../src/output';
+import { Parser } from '../src/parser';
 import { createVersionContext } from '../src/util/electron_context';
 import { writeIssues } from '../src/util';
 import { findOldestElectronVersionWithSource } from '../src/util/electron_version';
@@ -36,9 +38,28 @@ function parseJsonl(file) {
   return body ? body.split('\n').map(line => JSON.parse(line)) : [];
 }
 
+function buildInventoryFromFiles(inputRoot, files) {
+  const parser = new Parser(false, true);
+  const collector = new RendererInventoryCollector();
+  const fileClassifications = {};
+
+  files.forEach(file => {
+    const [type, data, content] = parser.parse(file, fs.readFileSync(file));
+    fileClassifications[file] = parser.getFileClassification(file);
+    collector.collect(file, type, data, content);
+  });
+
+  return buildInventory(inputRoot, fileClassifications, collector.buildComponentInventory());
+}
+
 describe('Structured output', () => {
   const findingFixture = path.resolve('test/checks/AtomicChecks/NODE_INTEGRATION_JS_CHECK_13_1.js');
   const brokenFixture = path.resolve('test/file_formats/broken.js');
+  const rendererInventoryFixtureDir = path.resolve('test/fixtures/renderer_inventory');
+  const rendererInventoryFixtureFiles = [
+    path.join(rendererInventoryFixtureDir, 'main.js'),
+    path.join(rendererInventoryFixtureDir, 'embed.html')
+  ];
   const nodeIntegrationOnly = ['nodeintegrationjscheck'];
 
   async function runFixture(input, options = {}) {
@@ -465,5 +486,108 @@ describe('Structured output', () => {
     parseErrors.length.should.equal(1);
     parseErrors[0].parser_status.should.equal('error');
     inventoryDoc.records[0].parser_status.should.equal('error');
+  });
+
+  it('includes renderer containers, webPreferences, and static relationships in schema v1 inventory', () => {
+    const inventory = buildInventoryFromFiles(rendererInventoryFixtureDir, rendererInventoryFixtureFiles);
+    const containerRecords = inventory.records.filter(record => record.entity_type === 'renderer_container');
+    const relationshipTypes = new Set(inventory.relationships.map(relationship => relationship.relationship_type));
+    const containerTypes = containerRecords.map(record => record.container_type).sort();
+
+    containerTypes.should.deep.equal(['BrowserView', 'BrowserWindow', 'WebContentsView', 'webview']);
+    inventory.records.some(record => record.entity_type === 'web_preferences' && record.container_type === 'BrowserWindow').should.equal(true);
+    inventory.records.some(record => record.entity_type === 'preload_script' && record.preload_path === '/preloads/main.js').should.equal(true);
+    inventory.records.some(record => record.entity_type === 'load_target' && record.target === 'https://example.com/app').should.equal(true);
+    inventory.records.some(record => record.entity_type === 'session' && record.partition === 'persist:builder-phase4').should.equal(true);
+    inventory.records.some(record => record.entity_type === 'global_sandbox' && record.enabled === true).should.equal(true);
+    relationshipTypes.has('has_web_preferences').should.equal(true);
+    relationshipTypes.has('uses_preload').should.equal(true);
+    relationshipTypes.has('uses_session').should.equal(true);
+    relationshipTypes.has('loads_target').should.equal(true);
+    relationshipTypes.has('has_navigation_handler').should.equal(true);
+    relationshipTypes.has('has_global_sandbox_evidence').should.equal(true);
+    relationshipTypes.has('global_sandbox_state').should.equal(false);
+    relationshipTypes.has('declared_in').should.equal(true);
+    inventory.relationships.filter(relationship => relationship.relationship_type === 'declared_in').length.should.equal(containerRecords.length);
+  });
+
+  it('preserves relative file names for direct single-file structured output calls', () => {
+    const issue = {
+      id: 'DIRECT_FILE_CHECK',
+      description: 'direct file check',
+      file: 'app/main.js',
+      location: { line: 1, column: 0 },
+      sample: 'new BrowserWindow()',
+      severity: { name: 'LOW' },
+      confidence: { name: 'CERTAIN' }
+    };
+    const findings = buildFindings('app/main.js', [issue], null);
+    const inventory = buildInventory('app/main.js', {
+      'app/main.js': { parser_status: 'ok' }
+    });
+
+    findings[0].file.should.equal('app/main.js');
+    inventory.records[0].file.should.equal('app/main.js');
+  });
+
+  it('keeps renderer inventory IDs and source-file links stable for absolute and relative paths', () => {
+    const relativeFixtureDir = path.relative(process.cwd(), rendererInventoryFixtureDir);
+    const relativeFixtureFiles = rendererInventoryFixtureFiles.map(file => path.relative(process.cwd(), file));
+    const absoluteInventory = buildInventoryFromFiles(rendererInventoryFixtureDir, rendererInventoryFixtureFiles);
+    const relativeInventory = buildInventoryFromFiles(relativeFixtureDir, relativeFixtureFiles);
+    const idsByType = (items, typeKey, idKey) => items.reduce((result, item) => {
+      if (!result[item[typeKey]])
+        result[item[typeKey]] = [];
+      result[item[typeKey]].push(item[idKey]);
+      return result;
+    }, {});
+    const sortGroupedIds = grouped => Object.keys(grouped).sort().reduce((result, key) => {
+      result[key] = grouped[key].sort();
+      return result;
+    }, {});
+
+    sortGroupedIds(idsByType(absoluteInventory.records, 'entity_type', 'entity_id'))
+      .should.deep.equal(sortGroupedIds(idsByType(relativeInventory.records, 'entity_type', 'entity_id')));
+    sortGroupedIds(idsByType(absoluteInventory.relationships, 'relationship_type', 'relationship_id'))
+      .should.deep.equal(sortGroupedIds(idsByType(relativeInventory.relationships, 'relationship_type', 'relationship_id')));
+    absoluteInventory.relationships.filter(relationship => relationship.relationship_type === 'declared_in').length.should.equal(4);
+    relativeInventory.relationships.filter(relationship => relationship.relationship_type === 'declared_in').length.should.equal(4);
+  });
+
+  it('resolves TypeScript renderer webPreferences aliases for inventory', () => {
+    const typescriptFixture = path.join(os.tmpdir(), `electro-renderer-inventory-${process.pid}.ts`);
+    fs.writeFileSync(typescriptFixture, `
+      const rendererOptions = { webPreferences: { preload: '/preloads/ts.js', partition: 'persist:ts' } };
+      const win = new BrowserWindow(rendererOptions);
+    `);
+
+    try {
+      const inventory = buildInventoryFromFiles(path.dirname(typescriptFixture), [typescriptFixture]);
+
+      inventory.records.some(record => record.entity_type === 'web_preferences' && record.static_values.preload === '/preloads/ts.js').should.equal(true);
+      inventory.records.some(record => record.entity_type === 'preload_script' && record.preload_path === '/preloads/ts.js').should.equal(true);
+      inventory.records.some(record => record.entity_type === 'session' && record.partition === 'persist:ts').should.equal(true);
+    } finally {
+      fs.unlinkSync(typescriptFixture);
+    }
+  });
+
+  it('represents will-attach-webview controls and html webview security settings in schema v1 inventory', () => {
+    const inventory = buildInventoryFromFiles(rendererInventoryFixtureDir, rendererInventoryFixtureFiles);
+    const attachHandler = inventory.records.find(record => record.entity_type === 'webview_attach_handler');
+    const htmlWebviewPreferences = inventory.records.find(record => record.entity_type === 'web_preferences' && record.container_type === 'webview');
+
+    should.exist(attachHandler);
+    attachHandler.prevents_attach.should.equal(true);
+    attachHandler.strips_preload.should.equal(true);
+    attachHandler.inspects_params_src.should.equal(true);
+    attachHandler.insecure_web_preferences.should.deep.equal(['nodeIntegration']);
+
+    should.exist(htmlWebviewPreferences);
+    htmlWebviewPreferences.static_values.nodeIntegration.should.equal(true);
+    htmlWebviewPreferences.static_values.webSecurity.should.equal(false);
+    htmlWebviewPreferences.static_values.partition.should.equal('persist:embed');
+    htmlWebviewPreferences.static_values.contextIsolation.should.equal(false);
+    htmlWebviewPreferences.static_values.sandbox.should.equal(true);
   });
 });
