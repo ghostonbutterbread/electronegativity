@@ -8,7 +8,7 @@ import chalk from 'chalk';
 import { gte, compare } from 'semver';
 
 export class Finder {
-  constructor(customScan, excludeFromScan, electronUpgrade) {
+  constructor(customScan, excludeFromScan, electronUpgrade, forceNoChecks = false) {
     let candidateChecks = Array.from(CHECKS)
 
     // init electron-upgrade specific checks given user-provided version numbers
@@ -25,6 +25,9 @@ export class Finder {
         process.exit(1);
       }
     }
+
+    if (forceNoChecks)
+      candidateChecks = [];
 
     // if the user is trying to start a custom check scan, we first load all the available checks (candidateChecks) and then we splice those who don't match the user-provided list
     this._enabled_checks = Object.assign(Object.create(candidateChecks), candidateChecks);

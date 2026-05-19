@@ -10,7 +10,7 @@ import { LoaderFile, LoaderAsar, LoaderDirectory } from './loader';
 import { Parser, parseErrorRecord } from './parser';
 import { Finder } from './finder';
 import { GlobalChecks, severity, confidence } from './finder';
-import { RendererInventoryCollector } from './inventory/renderer_collector';
+import { RendererInventoryCollector, PreloadIpcCollector, isPreloadIpcAuditCheckName } from './inventory';
 import { buildFindings, buildHypotheses, buildInventory, buildRunMetadata, buildSarifDocument, contextPacketFilename, writeOutputDirectory } from './output';
 import { createFuseContext, createVersionContext } from './util/electron_context';
 import { extension, input_exists, is_directory, writeIssues, getRelativePath } from './util';
@@ -118,6 +118,8 @@ export default async function run(options, forCli = false) {
   // but this is not granted in case Electronegativity is used programmatically
   options.customScan = (options.customScan || []).map(c => c.toLowerCase());
   options.excludeFromScan = (options.excludeFromScan || []).map(c => c.toLowerCase());
+  const requestedCustomScan = Array.from(options.customScan);
+  const requestedExcludeFromScan = Array.from(options.excludeFromScan);
 
   // Parser options initialization
   const scannerRoot = is_directory(options.input) ? options.input : path.dirname(options.input);
@@ -136,9 +138,12 @@ export default async function run(options, forCli = false) {
   // Custom/Exclusion Scans initialization
   if (options.customScan.length > 0) options.customScan = options.customScan.filter(r => !r.includes('globalcheck')).concat(globalChecker.dependencies);
   if (options.excludeFromScan.length > 0) options.excludeFromScan = options.excludeFromScan.filter(r => !r.includes('globalcheck'));
+  options.customScan = options.customScan.filter(r => !isPreloadIpcAuditCheckName(r));
+  options.excludeFromScan = options.excludeFromScan.filter(r => !isPreloadIpcAuditCheckName(r));
 
   // Finder initialization
-  const finder = await new Finder(options.customScan, options.excludeFromScan, options.electronUpgrade);
+  const noAtomicChecks = requestedCustomScan.length > 0 && options.customScan.length === 0;
+  const finder = await new Finder(options.customScan, noAtomicChecks ? [] : options.excludeFromScan, options.electronUpgrade, noAtomicChecks);
   const filenames = [...loader.list_files];
 
   // Results' table initialization
@@ -147,6 +152,10 @@ export default async function run(options, forCli = false) {
   let parseErrors = [];
   let fileClassifications = {};
   const rendererInventoryCollector = new RendererInventoryCollector();
+  const preloadIpcCollector = new PreloadIpcCollector({
+    customScan: requestedCustomScan,
+    excludeFromScan: requestedExcludeFromScan
+  });
   let table = new Table({
     head: [__('tableCheckId'), __('tableAffectedFile'), __('tableLocation'), __('tableDescription')],
     colWidths:[undefined, undefined, undefined, 50], // necessary for wordWrap
@@ -187,6 +196,7 @@ export default async function run(options, forCli = false) {
         fileClassifications[file] = parser.getFileClassification(file);
         const result = await finder.find(file, data, type, content, null, versionContext, fileClassifications[file]);
         rendererInventoryCollector.collect(file, type, data, content);
+        preloadIpcCollector.collect(file, type, data, content, fileClassifications[file]);
         issues.push(...result);
       } catch (error) {
         const classification = parser.getFileClassification(file);
@@ -218,6 +228,9 @@ export default async function run(options, forCli = false) {
   // and false positives before presenting them in the final report (e.g. CSP)
   issues = await globalChecker.getResults(issues, options.output, fileClassifications);
 
+  const preloadIpcResults = preloadIpcCollector.buildAuditResults();
+  issues.push(...preloadIpcResults.issues);
+
   // Adjust visibility
   issues = issues.filter(i => !i.hasOwnProperty('visibility') || (!i.visibility.inlineDisabled && !i.visibility.globalCheckDisabled));
 
@@ -229,7 +242,11 @@ export default async function run(options, forCli = false) {
 
   const runMetadata = buildRunMetadata(options, versionContext, generatedAt, fuseContext);
   const findings = buildFindings(options.input, issues, versionContext, fuseContext);
-  const inventory = buildInventory(options.input, fileClassifications, rendererInventoryCollector.buildComponentInventory());
+  const rendererInventory = rendererInventoryCollector.buildComponentInventory();
+  const inventory = buildInventory(options.input, fileClassifications, {
+    records: rendererInventory.records.concat(preloadIpcResults.componentInventory.records),
+    relationships: rendererInventory.relationships.concat(preloadIpcResults.componentInventory.relationships)
+  });
   const hypotheses = buildHypotheses();
   const sarif = buildSarifDocument(options.isRelative ? options.input : null, findings);
 

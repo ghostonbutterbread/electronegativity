@@ -38,11 +38,13 @@ const INVENTORY_KEY_FILE_PARTS = {
   renderer_container: [1],
   web_preferences: [2],
   preload_script: [2],
+  preload_bridge: [1],
   load_target: [2],
   session: [1, 2],
   navigation_handler: [2],
   webview_attach_handler: [2],
-  global_sandbox: [1]
+  global_sandbox: [1],
+  ipc_channel: [1]
 };
 
 function normalizeInventoryKey(input, key) {
@@ -166,6 +168,12 @@ function confidenceReasons(issue) {
     reasons.push('file classified as bundled');
   if (classification.vendor_or_generated)
     reasons.push('file classified as vendor_or_generated');
+
+  const extraReasons = issue && issue.properties && Array.isArray(issue.properties.confidenceReasons) ? issue.properties.confidenceReasons : [];
+  extraReasons.forEach(reason => {
+    if (!reasons.includes(reason))
+      reasons.push(reason);
+  });
 
   return reasons;
 }
@@ -343,14 +351,14 @@ export function buildFindings(input, issues, electronVersion, fuseContextValue =
       line: issue.location ? issue.location.line : null,
       column: issue.location ? issue.location.column : null,
       evidence: issue.sample || null,
-      electron_component: null,
-      affected_window_or_channel: null,
-      trust_boundary: null,
+      electron_component: issue && issue.properties ? issue.properties.electronComponent || null : null,
+      affected_window_or_channel: issue && issue.properties ? issue.properties.affectedChannel || null : null,
+      trust_boundary: issue && issue.properties ? issue.properties.trustBoundary || null : null,
       version_context: findingVersionContext(issue, versionContext, fuseContext),
       validation_state: 'static_only',
       manual_review: Boolean(issue.manualReview),
       file_classification: issueFileClassification(issue),
-      next_agent_hint: issue.manualReview ? 'Review the surrounding Electron trust boundary before triage.' : null
+      next_agent_hint: issue && issue.properties && issue.properties.nextAgentHint ? issue.properties.nextAgentHint : (issue.manualReview ? 'Review the surrounding Electron trust boundary before triage.' : null)
     };
   });
 
